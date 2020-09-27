@@ -26,7 +26,20 @@ Flask Image Search is an extension for flask that makes it easy to add image sea
 Features
 --------
 
-* TODO
+* Works with `Flask-SQlAlchemy`_ to make searching your database easy.
+* Searching is fast
+* The indexed images take up very little storage
+* Database changes automatically update the image indexes
+
+.. _Flask-SQlAlchemy: https://flask-sqlalchemy.palletsprojects.com/
+
+How it works
+------------
+
+Flask-Image-Search uses a `CNN (Convolutional neural network) <https://en.wikipedia.org/wiki/Convolutional_neural_network>`_,
+the CNN is used to extract the features from the images in a dataset. The features are stored so they can be searched later with a query image.
+When an image is searched it's features are extracted and compared with all the other images to get the distance from the search image,
+the distances are then used to sort the images.
 
 Credits
 -------

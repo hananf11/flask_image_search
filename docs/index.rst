@@ -1,17 +1,16 @@
 Welcome to Flask Image Search's documentation!
-======================================
+==============================================
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+    :maxdepth: 2
 
-   readme
-   installation
-   usage
-   modules
-   contributing
-   authors
-   history
+    readme
+    installation
+    usage
+    contributing
+    authors
+    history
+    flask_image_search
 
 Indices and tables
 ==================
