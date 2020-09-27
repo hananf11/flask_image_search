@@ -2,7 +2,7 @@
 
 """The setup script."""
 
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 with open('README.rst') as readme_file:
     readme = readme_file.read()
@@ -10,7 +10,7 @@ with open('README.rst') as readme_file:
 with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
-requirements = [ ]
+requirements = ['flask', 'flask-sqlalchemy', 'tensorflow', 'keras', 'pillow', ]
 
 setup_requirements = ['pytest-runner', ]
 
@@ -31,7 +31,8 @@ setup(
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
     ],
-    description="Flask Image Search is an extension for flask that makes it easy to add image searching to your flask site.",
+    description="Flask Image Search is an extension for flask that makes it easy to add \
+    image searching to your flask site.",
     install_requires=requirements,
     license="MIT license",
     long_description=readme + '\n\n' + history,
