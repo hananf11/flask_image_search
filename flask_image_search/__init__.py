@@ -4,9 +4,10 @@ import threading
 
 import numpy as np
 from PIL import Image
-from sqlalchemy import event, column
+from sqlalchemy import event, column, nullslast
 from sqlalchemy.orm import query_expression, with_expression
 from sqlalchemy.sql.expression import case
+from sqlalchemy_utils import get_query_entities, get_class_by_table, get_type
 
 __author__ = """Hanan Fokkens"""
 __email__ = 'hananfokkens@gmail.com'
@@ -143,6 +144,8 @@ class ImageSearch(object):
 
         self.db = sqlalchemy.db
 
+        self.db.Query.image_search = lambda self_, *args, **kwargs: self.query_search(*args, **kwargs)(self_)
+
         if tensorflow:
             os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # set tensorflow debug level to only show errors
             from .feature_extractor import FeatureExtractor
@@ -151,24 +154,18 @@ class ImageSearch(object):
         self.feature_extractor = FeatureExtractor()
         self.models = {}
 
-    def register(self, id='id', url='url', ignore='ignore', foreign=None):
+    def register(self, id='id', path='path', ignore='ignore'):
         """This decorator is used to register Flask-SQLAlchemy Model with  the image search.
         After a model is registered it can then indexed and searched.
 
         :param id: This is the name of the primary_key column. Defaults to 'id'.
         :type id: str
-        :param url: This is the name of the column containing the image url. Defaults to 'url'.
-        :type url: str
+        :param path: This is the name of the column containing the image path. Defaults to 'path'.
+        :type path: str
         :param ignore: This is the name of the column used to decide if an image should be ignored.
             defaults to 'ignore'.
         :type ignore: str
-        :param foreign: A list of foreign_keys to store.
-            This is used so image search works on Models related to the Model with images. Defaults to None
-        :type foreign: list[str] or None
         """
-        if foreign is None:
-            foreign = []
-
         def inner(model):
             # work out the file path
             file_path = os.path.join(self.root, self.path_prefix + model.__tablename__ + '.npz')
@@ -177,15 +174,31 @@ class ImageSearch(object):
             self.models[model.__tablename__] = dict(
                 features=sdict(file_path),
                 id=id,
-                url=url,
+                path=path,
                 ignore=ignore if hasattr(model, ignore) else False,
-                foreign=foreign
+                relations={}
             )
 
             data = self.models[model.__tablename__]
 
-            # add events so that the changes on the database are reflected in indexed images.
+            for foreign_key in model.__table__.foreign_keys:
+                related_model = get_class_by_table(self.db.Model, foreign_key.column.table)
+                for key, prop in related_model().__mapper__._props.items():
+                    if get_type(prop) == model:
+                        relationship = key
+                        break
+                else:
+                    continue
+                data['relations'].update({
+                    foreign_key.column.table.name: {
+                        'model': related_model,
+                        'model_column': foreign_key.column,
+                        'model_relationship': relationship,
+                        'column': foreign_key.parent
+                    }
+                })
 
+            # add events so that the changes on the database are reflected in indexed images.
             @event.listens_for(model, "after_delete")
             def image_search_model_deleted(mapper, connection, target):
                 """A model was deleted."""
@@ -206,8 +219,6 @@ class ImageSearch(object):
             logger.info(f"Loaded in {len(data['features'])} image indexes for the model {model.__tablename__}")
 
             model.distance = query_expression()
-
-            model.query_class.image_search = lambda self_, *args, **kwargs: self.query_search(*args, **kwargs)(self_)
 
             return model
 
@@ -237,8 +248,8 @@ class ImageSearch(object):
         image_id_parts = [str(getattr(entry, data['id']))]
 
         # add all the foreign keys to the image_id_parts list
-        for fk in data['foreign']:
-            image_id_parts.append(str(getattr(entry, fk)))
+        for relation in data['relations'].values():
+            image_id_parts.append(str(getattr(entry, relation['column'].name)))
 
         image_id = "_".join(image_id_parts)  # join all the parts with an underscore
         return image_id
@@ -257,7 +268,7 @@ class ImageSearch(object):
             # if this model is ignored return false
             return False
 
-        image_path = getattr(entry, data['url'])  # get the image url
+        image_path = getattr(entry, data['path'])  # get the image path
 
         image_id = self.image_id(entry)
 
@@ -342,15 +353,7 @@ class ImageSearch(object):
         # return a list of the ids and distances from the search image
         return tuple((ids[id], distances[id]) for id in distances_id_sorted)
 
-    def get_model_from_query(self, query):
-        """This is a helper function that tries to get a model from a query.
-
-        :param query: The query to get th model from.
-        :type query: flask_sqlalchemy.BaseQuery
-        """
-        pass
-
-    def query_search(self, image, limit=20, model_=None, hard=True):
+    def query_search(self, image, limit=20, image_model=None, query_model=None, hard=True, join=False):
         """This is used to search filter a model using an image.
         query_search calls `search` and adds the results to the query,
         by adding a case statement under the column `distance`.
@@ -362,55 +365,83 @@ class ImageSearch(object):
         :type image: PIL.Image.Image or str
         :param limit: the number of results, defaults to 20
         :type limit: int
-        :param model_: The model that has been registered.
-            If ths is set to None this will try and use the query to find the Model, defaults to None
-        :type model_: flask_sqlalchemy.Model
+        :param image_model: The model that has been registered, the one containing the image.
+            If ths is set to None the query will be used to find this value, defaults to None
+        :type image_model: flask_sqlalchemy.Model
+        :param query_model: The model is being queried, this is only used when join is True.
+            When this is set to None the query will be used to find this value.
+        :type query_model: flask_sqlalchemy.Model
         :param hard: If this is set to True the query will be trimmed so that it only the limit.
             Setting this to false will sort `limit` results and then return all other images without a set order,
             defaults to True
         :type hard: bool
+        :param join: Set this to join mode.
+        :type join: bool
         :return: returns a function
         :rtype: function
         """
-        if type(image) is str:
-            image = Image.open(image)
-
         def inner(query):
-            model = model_
+            image_model_ = image_model
+            query_model_ = query_model
             # if the image is none just do nothing to the query.
             if image is None:
                 return query
 
+            entities = get_query_entities(query)
+
+            if query_model_ is None and join:
+                query_model_ = entities[0]  # in join mode query_model_ is the first entity
+
             # get the flask sqlalchemy model form column descriptions
-            if model is None:
-                # construct a set of possible models
-                models = set(
-                    col['type'] for col in query.column_descriptions if hasattr(col['type'], '__tablename__')
-                )
-                if len(models) > 1:
-                    raise Exception("Can't work out model from query, please set model to the correct model.")
+            if image_model_ is None:
+                if join:
+                    # in join mode the image_model_ is in a mapper in the second entity
+                    image_model_ = entities[1].class_
                 else:
-                    model = models.pop()
+                    image_model_ = entities[0]  # in the nomral mode the image_model_ is the first entity
 
-            results = self.search(model, image, limit)
+            data = self.models[image_model_.__tablename__]
 
-            data = self.models[model.__tablename__]
+            expression = image_model_.distance
 
-            # get the id column
-            model_id_column = getattr(model, data['id'])
+            results = self.search(image_model_, image, -1 if join else limit)  # get the ids and distances
 
-            ids = []
-            case_comparisons = []
+            # get the id column so it can be used in the case statment
+            id_column = getattr(image_model_, data['id'])
 
+            if join:
+                # update the exspression column statment
+                expression = data['relations'][query_model_.__tablename__]['model_relationship']
+                expression = f"{expression}.distance"
+
+                fk_index = list(data['relations'].keys()).index(query_model_.__tablename__)
+                fks = []
+                new_results = []
+
+                # group images by the forigen key so that the correct limit is met
+                for id, distance in results:
+                    fk_value = id.split("_")[fk_index + 1]  # get the fk_value taking into account the id
+                    if len(fks) < limit or fk_value in fks:
+                        new_results.append((id, distance))  # add it to the new value lists
+                        if fk_value not in fks:
+                            # if the fk_value isnt in the list add it
+                            fks.append(fk_value)
+
+                results = new_results  # replace the results
+
+            whens = []
+
+            # construct the whens for the case stament
             for id, distance in results:
-                ids.append(id.split("_")[0])  # add the id
-                case_comparisons.append(((
-                    model_id_column == id.split("_")[0]),
+                whens.append((
+                    id_column == id.split("_")[0],
                     float(distance)
                 ))
-            case_statement = case(case_comparisons, else_=None).label("distance")
 
-            query = query.options(with_expression(model.distance, case_statement)).order_by("distance")
+            case_statement = case(whens, else_=None).label("distance")
+
+            query = query.options(with_expression(expression, case_statement))
+            query = query.order_by(nullslast("distance"))
             if hard:
                 query = query.filter(column("distance"))
 
