@@ -1,9 +1,9 @@
 """Tests for `flask_image_search` package."""
 
 import logging
+import os
 
 import pytest
-import os
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.sql.expression import func
@@ -29,7 +29,7 @@ def app():
 def image_search(app):
     """Fixture that returns an instance of image search."""
     app.config.update({
-        "IMAGE_SEARCH_PATH_PREFIX": "../resources/image_search/"
+        "IMAGE_SEARCH_PATH_PREFIX": "../resources/image_search_tests/"
     })
 
     return ImageSearch(app)
@@ -60,8 +60,12 @@ def image_model(db, image_search, model_model):
     @image_search.register()
     class Image(db.Model):
         id = db.Column(db.Integer, primary_key=True)
-        path = db.Column(db.String, nullable=False)
+        path_ = db.Column('path', db.String, nullable=False)
         model_id = db.Column(db.Integer, db.ForeignKey(model_model.id), nullable=False)
+
+        @property
+        def path(self):
+            return os.path.join('../resources/', self.path_)
 
     image_search.index_model(Image)
     return Image
