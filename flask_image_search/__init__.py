@@ -4,10 +4,10 @@ import threading
 
 import numpy as np
 from PIL import Image
-from sqlalchemy import event, column, nullslast
+from sqlalchemy import column, event, nullslast
 from sqlalchemy.orm import query_expression, with_expression
 from sqlalchemy.sql.expression import case
-from sqlalchemy_utils import get_query_entities, get_class_by_table, get_type
+from sqlalchemy_utils import get_class_by_table, get_query_entities, get_type
 
 __author__ = """Hanan Fokkens"""
 __email__ = 'hananfokkens@gmail.com'
@@ -277,7 +277,7 @@ class ImageSearch(object):
             return True
 
         # open the image
-        image = Image.open(os.path.join(self.root, image_path.strip('/')))
+        image = Image.open(os.path.join(self.root, image_path))
         image_feature = self.feature_extractor.extract(image)  # extract the features
         data['features'][image_id] = image_feature  # save the features to the features dict
         return True
