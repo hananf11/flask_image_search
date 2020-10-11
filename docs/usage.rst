@@ -156,7 +156,8 @@ It is possible to search a Model that does not contain images but is related to 
         ...
         animal_id = db.Column(db.Integer, db.ForeignKey("animal.id"))
 
-    animals = Animals.query.image_search('my_image.jpg', join=True).all()
+    animals = Animals.query.join(Image).options(db.contains_eager(Animals.images)) \
+        .image_search('my_image.jpg', join=True).all()
 
 .. warning::
     the limit in join mode doesn't determin the amount of parameter in the query.
