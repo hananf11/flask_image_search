@@ -26,12 +26,12 @@ Flask Image Search is an extension for flask that makes it easy to add image sea
 Features
 --------
 
-* Works with `Flask-SQlAlchemy`_ to make searching your database easy.
+* Works with `Flask-SQLAlchemy`_ to make searching your database easy.
 * Searching is fast
 * The indexed images take up very little storage
 * Database changes automatically update the image indexes
 
-.. _Flask-SQlAlchemy: https://flask-sqlalchemy.palletsprojects.com/
+.. _Flask-SQLAlchemy: https://flask-sqlalchemy.palletsprojects.com/
 
 How it works
 ------------
