@@ -3,6 +3,8 @@ import os
 import threading
 
 import numpy as np
+from keras.models import Model as KerasModel
+from keras.preprocessing import image as keras_image
 from PIL import Image
 from sqlalchemy import column, event, nullslast
 from sqlalchemy.orm import query_expression, with_expression
@@ -127,7 +129,8 @@ class ImageSearch(object):
 
         :param app: The Flask app for this project.
         :type app: flask.Flask
-        :param tensorflow: Should tensorflow be used, tensorflow can be dissabled so debug mode can be used easier,
+        :param tensorflow: Should tensorflow be used,
+            tensorflow can be dissabled to make working on other parts of your app eaiser
             defaults to True
         :type tensorflow: bool
         :raises Exception: Exception may be raised if Flask-SQLAlchemy is not initialized.
@@ -136,6 +139,7 @@ class ImageSearch(object):
 
         self.root = app.root_path
         self.path_prefix = app.config["IMAGE_SEARCH_PATH_PREFIX"]
+        self._tensorflow = tensorflow
 
         sqlalchemy = app.extensions.get('sqlalchemy')
 
@@ -148,10 +152,15 @@ class ImageSearch(object):
 
         if tensorflow:
             os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # set tensorflow debug level to only show errors
-            from .feature_extractor import FeatureExtractor
-        else:
-            from .feature_extractor_debug import FeatureExtractor
-        self.feature_extractor = FeatureExtractor()
+
+            from keras.applications.vgg16 import VGG16, preprocess_input
+
+            # this function is used to preprocess the values before they are put into the keras model
+            self.__preprocess_input = preprocess_input
+            # create a model where the layer before the final base_model node is the output
+            # self.__keras_model = KerasModel(inputs=base_model.input, output=base_model.get_layer('fc1').output)
+            base_model = VGG16(weights='imagenet')
+            self.__keras_model = KerasModel(inputs=base_model.input, outputs=base_model.get_layer('fc1').output)
         self.models = {}
 
     def register(self, id='id', path='path', ignore='ignore'):
@@ -254,6 +263,23 @@ class ImageSearch(object):
         image_id = "_".join(image_id_parts)  # join all the parts with an underscore
         return image_id
 
+    def feature_extract(self, image):
+        """This is a helper function that takes an image processes it and returns the features.
+
+        :param image: The image to get the features from.
+        :type image: PIL.Image.Image
+        """
+        if self._tensorflow:
+            image = image.resize((224, 224)).convert('RGB')  # resize the image and convert to RGB
+            image_array = keras_image.img_to_array(image)  # turn image into np array
+            image_array = np.expand_dims(image_array, axis=0)  # expand the shape of array
+            input_array = self.__preprocess_input(image_array)
+
+            feature = self.__keras_model.predict(input_array)[0]  # process
+            return feature / np.linalg.norm(feature)  # normalize the features
+        else:
+            return np.random.rand(4096)
+
     def index(self, entry, replace=False):
         """This method indexes an entry of a registered Model.
 
@@ -276,10 +302,10 @@ class ImageSearch(object):
             # if the image isn't allowed to be reindexed and it already is indexed skip it
             return True
 
-        # open the image
+        # open image
         image = Image.open(os.path.join(self.root, image_path))
-        image_feature = self.feature_extractor.extract(image)  # extract the features
-        data['features'][image_id] = image_feature  # save the features to the features dict
+
+        data['features'][image_id] = self.feature_extract(image)  # save the features to the features dict
         return True
 
     def index_model(self, model, replace=False):
@@ -338,7 +364,7 @@ class ImageSearch(object):
         if type(model) is not str:
             model = model.__tablename__
 
-        search_features = self.feature_extractor.extract(image)  # extract the features form the search image.
+        search_features = self.feature_extract(image)  # extract the features form the search image.
 
         ids, features = zip(*self.models[model]['features'].items())
 
