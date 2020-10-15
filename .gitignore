@@ -104,4 +104,4 @@ ENV/
 # IDE settings
 .vscode/
 
-resources/image_search_example_search/*
+examples/image_search
