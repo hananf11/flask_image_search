@@ -28,9 +28,6 @@ def app():
 @pytest.fixture
 def image_search(app):
     """Fixture that returns an instance of image search."""
-    app.config.update({
-        "IMAGE_SEARCH_PATH_PREFIX": "../resources/image_search_tests/"
-    })
 
     return ImageSearch(app)
 
@@ -38,7 +35,7 @@ def image_search(app):
 @pytest.fixture
 def db(app):
     app.config.update({
-        "SQLALCHEMY_DATABASE_URI": f"sqlite:///{app.root_path}/../resources/test.db",
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///test.db",
         "SQLALCHEMY_TRACK_MODIFICATIONS": False
     })
     return SQLAlchemy(app)
@@ -60,12 +57,8 @@ def image_model(db, image_search, radio_model):
     @image_search.register()
     class Image(db.Model):
         id = db.Column(db.Integer, primary_key=True)
-        path_ = db.Column('path', db.String, nullable=False)
+        path = db.Column(db.String, nullable=False)
         radio_id = db.Column(db.Integer, db.ForeignKey(radio_model.id), nullable=False)
-
-        @property
-        def path(self):
-            return os.path.join('../resources/', self.path_)
 
     image_search.index_model(Image)
     return Image
@@ -89,20 +82,20 @@ def test_indexed(image_model, image_search):
 
 
 def test_search(image_model, image_search):
-    results = image_search.search(image_model, os.path.join(BASE_PATH, "../resources/test.jpg"), 5)
+    results = image_search.search(image_model, os.path.join(BASE_PATH, "./test.jpg"), 5)
     # check that the results are correct by checking the ids
     assert [result[0] for result in results] == ['4512_439', '2649_439', '4514_371', '4516_371', '2194_438']
 
 
 def test_query_search(image_model, image_search):
-    images = image_model.query.image_search(os.path.join(BASE_PATH, "../resources/test.jpg"), 5).all()
+    images = image_model.query.image_search(os.path.join(BASE_PATH, "./test.jpg"), 5).all()
     # check that the correct Images were returned
     assert [str(image.id) for image in images] == ['4512', '2649', '4514', '4516', '2194']
 
 
 def test_transform_query_search(image_model, image_search):
     images = image_model.query.with_transformation(
-        image_search.query_search(os.path.join(BASE_PATH, "../resources/test.jpg"), 5)
+        image_search.query_search(os.path.join(BASE_PATH, "./test.jpg"), 5)
     ).all()
     # check that the correct Images were returned
     assert [str(image.id) for image in images] == ['4512', '2649', '4514', '4516', '2194']
@@ -110,7 +103,7 @@ def test_transform_query_search(image_model, image_search):
 
 def test_query_search_join(db, image_model, radio_model, image_search):
     query = radio_model.query.join(image_model).options(db.contains_eager(radio_model.images))
-    query = query.image_search(os.path.join(BASE_PATH, "../resources/test.jpg"), 3, join=True)
+    query = query.image_search(os.path.join(BASE_PATH, "./test.jpg"), 3, join=True)
     radios = query.all()
     assert [str(model.id) for model in radios] == ['439', '371', '438']
     assert [str(image.id) for image in radios[0].images] == ['4512', '2649', '2204', '4513', '5115', '5117', '5116']
