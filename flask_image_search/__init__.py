@@ -3,10 +3,8 @@ import os
 import threading
 
 import numpy as np
-from keras.models import Model as KerasModel
-from keras.preprocessing import image as keras_image
 from PIL import Image
-from sqlalchemy import column, event, nullslast
+from sqlalchemy import event, nullslast, literal_column
 from sqlalchemy.orm import query_expression, with_expression
 from sqlalchemy.sql.expression import case
 from sqlalchemy_utils import get_class_by_table, get_query_entities, get_type
@@ -154,9 +152,12 @@ class ImageSearch(object):
             os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # set tensorflow debug level to only show errors
 
             from keras.applications.vgg16 import VGG16, preprocess_input
+            from keras.preprocessing import image
+            from keras.models import Model as KerasModel
 
             # this function is used to preprocess the values before they are put into the keras model
             self.__preprocess_input = preprocess_input
+            self.__keras_image = image
             # create a model where the layer before the final base_model node is the output
             # self.__keras_model = KerasModel(inputs=base_model.input, output=base_model.get_layer('fc1').output)
             base_model = VGG16(weights='imagenet')
@@ -271,7 +272,7 @@ class ImageSearch(object):
         """
         if self._tensorflow:
             image = image.resize((224, 224)).convert('RGB')  # resize the image and convert to RGB
-            image_array = keras_image.img_to_array(image)  # turn image into np array
+            image_array = self.__keras_image.img_to_array(image)  # turn image into np array
             image_array = np.expand_dims(image_array, axis=0)  # expand the shape of array
             input_array = self.__preprocess_input(image_array)
 
@@ -344,7 +345,7 @@ class ImageSearch(object):
         except KeyError:
             raise KeyError("That Image is not indexed.")
 
-    def search(self, model, image, limit=None):
+    def search(self, model, image):
         """This searches the indexed data with an image and returns a tuple of id strings.
 
         :param model: This is the model to be search.
@@ -352,8 +353,6 @@ class ImageSearch(object):
         :type model: str or flask_sqlalchemy.Model
         :param image: The search image
         :type image: PIL.Image.Image or str
-        :param limit: The number of results to be returned, defaults to None
-        :type limit: int or None
         :return: This returns a tuple of tuples containing the id and the distance from the search image.
         :rtype: tuple[tuple[str, int]]
         """
@@ -373,34 +372,23 @@ class ImageSearch(object):
         # argsort [1, 3, 2] --> [0, 2, 1]
         distances_id_sorted = np.argsort(distances)  # get the order to apply to sort the images
 
-        if limit is not None:
-            distances_id_sorted = distances_id_sorted[:limit]
-
         # return a list of the ids and distances from the search image
         return tuple((ids[id], distances[id]) for id in distances_id_sorted)
 
-    def query_search(self, image, limit=20, image_model=None, query_model=None, hard=True, join=False):
+    def query_search(self, image, image_model=None, query_model=None, join=False):
         """This is used to search filter a model using an image.
         query_search calls `search` and adds the results to the query,
         by adding a case statement under the column `distance`.
-        This case statement is used in the order added to the query,
-        and if `hard` is set to True then is also added as a filter.
-        This distance can be accessed in your query results as `distance` column on your model.
+        This case statement is used in the order added to the query.
 
         :param image: the search image. this can be a path string or a PIL image.
         :type image: PIL.Image.Image or str
-        :param limit: the number of results, defaults to 20
-        :type limit: int
         :param image_model: The model that has been registered, the one containing the image.
             If ths is set to None the query will be used to find this value, defaults to None
         :type image_model: flask_sqlalchemy.Model
         :param query_model: The model is being queried, this is only used when join is True.
             When this is set to None the query will be used to find this value.
         :type query_model: flask_sqlalchemy.Model
-        :param hard: If this is set to True the query will be trimmed so that it only the limit.
-            Setting this to false will sort `limit` results and then return all other images without a set order,
-            defaults to True
-        :type hard: bool
         :param join: Set this to join mode.
         :type join: bool
         :return: returns a function
@@ -430,7 +418,7 @@ class ImageSearch(object):
 
             expression = image_model_.distance
 
-            results = self.search(image_model_, image, -1 if join else limit)  # get the ids and distances
+            results = self.search(image_model_, image)  # get the ids and distances
 
             # get the id column so it can be used in the case statment
             id_column = getattr(image_model_, data['id'])
@@ -440,36 +428,20 @@ class ImageSearch(object):
                 expression = data['relations'][query_model_.__tablename__]['model_relationship']
                 expression = f"{expression}.distance"
 
-                fk_index = list(data['relations'].keys()).index(query_model_.__tablename__)
-                fks = []
-                new_results = []
-
-                # group images by the forigen key so that the correct limit is met
-                for id, distance in results:
-                    fk_value = id.split("_")[fk_index + 1]  # get the fk_value taking into account the id
-                    if len(fks) < limit or fk_value in fks:
-                        new_results.append((id, distance))  # add it to the new value lists
-                        if fk_value not in fks:
-                            # if the fk_value isnt in the list add it
-                            fks.append(fk_value)
-
-                results = new_results  # replace the results
-
             whens = []
 
             # construct the whens for the case stament
             for id, distance in results:
                 whens.append((
-                    id_column == id.split("_")[0],
-                    float(distance)
+                    # literal columns insted of bind parameters
+                    (id_column == literal_column(id.split("_")[0])),
+                    literal_column(str(distance))
                 ))
 
             case_statement = case(whens, else_=None).label("distance")
 
             query = query.options(with_expression(expression, case_statement))
             query = query.order_by(nullslast("distance"))
-            if hard:
-                query = query.filter(column("distance"))
 
             return query
 
