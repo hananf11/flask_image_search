@@ -130,12 +130,6 @@ this is an alias to :meth:`ImageSearch.query_search()` so it takes all the same 
 
     images = Image.query.image_search('my_image.jpg').all()
 
-.. note::
-    An important parameter for :meth:`Query.image_search`/:meth:`ImageSearch.query_search()` is the ``limit``,
-    by default the ``limit`` is 20 if you want to no ``limit`` it can be set to -1.
-    The limit determins how many distances will be returned if the ``hard`` parameter is True then only ``limit`` results will be returned by the query.
-    The ``limit`` is there so that there are not too many parameters in the case statment.
-
 
 Join searching
 ^^^^^^^^^^^^^^
@@ -158,9 +152,3 @@ It is possible to search a Model that does not contain images but is related to 
 
     animals = Animals.query.join(Image).options(db.contains_eager(Animals.images)) \
         .image_search('my_image.jpg', join=True).all()
-
-.. warning::
-    the limit in join mode doesn't determin the amount of parameter in the query.
-
-    in the example above the default limit of 20 is used meaning 20 animals will be returned,
-    but if each animal has 5 images attached to it 100 parameters will be in the query.

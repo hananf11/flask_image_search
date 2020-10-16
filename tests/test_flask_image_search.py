@@ -82,29 +82,32 @@ def test_indexed(image_model, image_search):
 
 
 def test_search(image_model, image_search):
-    results = image_search.search(image_model, os.path.join(BASE_PATH, "./test.jpg"), 5)
+    results = image_search.search(image_model, os.path.join(BASE_PATH, "./test.jpg"))
     # check that the results are correct by checking the ids
-    assert [result[0] for result in results] == ['4512_439', '2649_439', '4514_371', '4516_371', '2194_438']
+    assert [result[0] for result in results[:5]] == ['4512_439', '2649_439', '4514_371', '4516_371', '2194_438']
 
 
 def test_query_search(image_model, image_search):
-    images = image_model.query.image_search(os.path.join(BASE_PATH, "./test.jpg"), 5).all()
+    images = image_model.query.image_search(os.path.join(BASE_PATH, "./test.jpg")).all()
     # check that the correct Images were returned
-    assert [str(image.id) for image in images] == ['4512', '2649', '4514', '4516', '2194']
+    assert [str(image.id) for image in images[:5]] == ['4512', '2649', '4514', '4516', '2194']
 
 
 def test_transform_query_search(image_model, image_search):
     images = image_model.query.with_transformation(
-        image_search.query_search(os.path.join(BASE_PATH, "./test.jpg"), 5)
+        image_search.query_search(os.path.join(BASE_PATH, "./test.jpg"))
     ).all()
     # check that the correct Images were returned
-    assert [str(image.id) for image in images] == ['4512', '2649', '4514', '4516', '2194']
+    assert [str(image.id) for image in images[:5]] == ['4512', '2649', '4514', '4516', '2194']
 
 
 def test_query_search_join(db, image_model, radio_model, image_search):
     query = radio_model.query.join(image_model).options(db.contains_eager(radio_model.images))
-    query = query.image_search(os.path.join(BASE_PATH, "./test.jpg"), 3, join=True)
-    radios = query.all()
+    query = query.image_search(os.path.join(BASE_PATH, "./test.jpg"), join=True)
+    radios = query.all()[:3]
+    for radio in radios:
+        for image in radio.images:
+            assert image.radio_id == radio.id
     assert [str(model.id) for model in radios] == ['439', '371', '438']
     assert [str(image.id) for image in radios[0].images] == ['4512', '2649', '2204', '4513', '5115', '5117', '5116']
     assert [str(image.id) for image in radios[1].images] == ['4514', '4516',
