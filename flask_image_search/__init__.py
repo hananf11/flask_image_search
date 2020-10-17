@@ -204,7 +204,6 @@ class ImageSearch(object):
                         'model': related_model,
                         'model_column': foreign_key.column,
                         'model_relationship': relationship,
-                        'column': foreign_key.parent
                     }
                 })
 
@@ -246,24 +245,6 @@ class ImageSearch(object):
             model = model.__tablename__
         return self.models[model]['features']
 
-    def image_id(self, entry):
-        """Helper function to genarate the id used to identify an image
-
-        :param entry: The model instance to get the id from
-        :type entry: flask_sqlalchemy.Model
-        """
-        data = self.models[entry.__tablename__]  # get the data for this entry
-
-        # create list of the parts for the image id
-        image_id_parts = [str(getattr(entry, data['id']))]
-
-        # add all the foreign keys to the image_id_parts list
-        for relation in data['relations'].values():
-            image_id_parts.append(str(getattr(entry, relation['column'].name)))
-
-        image_id = "_".join(image_id_parts)  # join all the parts with an underscore
-        return image_id
-
     def feature_extract(self, image):
         """This is a helper function that takes an image processes it and returns the features.
 
@@ -297,7 +278,7 @@ class ImageSearch(object):
 
         image_path = getattr(entry, data['path'])  # get the image path
 
-        image_id = self.image_id(entry)
+        image_id = str(getattr(entry, data['id']))
 
         if not replace and image_id in data['features']:
             # if the image isn't allowed to be reindexed and it already is indexed skip it
@@ -339,7 +320,7 @@ class ImageSearch(object):
         data = self.models[entry.__tablename__]  # get the data related to this entry
 
         # get the image id
-        image_id = self.image_id(entry)
+        image_id = str(getattr(entry, data['id']))
         try:
             del data['features'][image_id]
         except KeyError:

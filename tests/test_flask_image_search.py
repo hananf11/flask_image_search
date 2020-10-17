@@ -84,13 +84,13 @@ def test_indexed(image_model, image_search):
 def test_search(image_model, image_search):
     results = image_search.search(image_model, os.path.join(BASE_PATH, "./test.jpg"))
     # check that the results are correct by checking the ids
-    assert [result[0] for result in results[:5]] == ['4512_439', '2649_439', '4514_371', '4516_371', '2194_438']
+    assert [result[0] for result in results[:5]] == ['4512', '2649', '4514', '4516', '2194']
 
 
 def test_query_search(image_model, image_search):
     images = image_model.query.image_search(os.path.join(BASE_PATH, "./test.jpg")).all()
     # check that the correct Images were returned
-    assert [str(image.id) for image in images[:5]] == ['4512', '2649', '4514', '4516', '2194']
+    assert [image.id for image in images[:5]] == [4512, 2649, 4514, 4516, 2194]
 
 
 def test_transform_query_search(image_model, image_search):
@@ -98,7 +98,7 @@ def test_transform_query_search(image_model, image_search):
         image_search.query_search(os.path.join(BASE_PATH, "./test.jpg"))
     ).all()
     # check that the correct Images were returned
-    assert [str(image.id) for image in images[:5]] == ['4512', '2649', '4514', '4516', '2194']
+    assert [image.id for image in images[:5]] == [4512, 2649, 4514, 4516, 2194]
 
 
 def test_query_search_join(db, image_model, radio_model, image_search):
@@ -108,8 +108,7 @@ def test_query_search_join(db, image_model, radio_model, image_search):
     for radio in radios:
         for image in radio.images:
             assert image.radio_id == radio.id
-    assert [str(model.id) for model in radios] == ['439', '371', '438']
-    assert [str(image.id) for image in radios[0].images] == ['4512', '2649', '2204', '4513', '5115', '5117', '5116']
-    assert [str(image.id) for image in radios[1].images] == ['4514', '4516',
-                                                             '4517', '4518', '1798', '1799', '4515', '4519', '1800']
-    assert [str(image.id) for image in radios[2].images] == ['2194', '2197', '2196', '2193', '2195']
+    assert [model.id for model in radios] == [439, 371, 438]
+    assert [image.id for image in radios[0].images] == [4512, 2649, 2204, 4513, 5115, 5117, 5116]
+    assert [image.id for image in radios[1].images] == [4514, 4516, 4517, 4518, 1798, 1799, 4515, 4519, 1800]
+    assert [image.id for image in radios[2].images] == [2194, 2197, 2196, 2193, 2195]
