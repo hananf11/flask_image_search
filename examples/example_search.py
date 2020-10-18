@@ -33,7 +33,7 @@ class Image(db.Model):
         return f"<Image {self.id} {self.radio.name}>"
 
 
-image_search.index_model(Image)  # index the model so it can be searched
+image_search.index_model(Image, threaded=False)  # index the model so it can be searched
 
 # search with an image using query_search
 images = Image.query.with_transformation(image_search.query_search("test.jpg")).all()

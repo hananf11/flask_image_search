@@ -51,8 +51,8 @@ class sdict(dict):
         if os.path.exists(self.file):
             with np.load(self.file) as file:
                 for key in file.files:
-                    # copy accross
-                    self.set(key, file[key])
+                    # copy accross without triggering save
+                    super().__setitem__(key, file[key])
 
     def __delitem__(self, name):
         super().__delitem__(name)
@@ -61,10 +61,6 @@ class sdict(dict):
     def __setitem__(self, name, value):
         super().__setitem__(name, value)
         self.save()
-
-    def set(self, name, value):
-        """Set a item without saving."""
-        super().__setitem__(name, value)
 
     def clear(self):
         super().clear()
@@ -186,7 +182,7 @@ class ImageSearch(object):
                 id=id,
                 path=path,
                 ignore=ignore if hasattr(model, ignore) else False,
-                relations={}
+                relationships={}
             )
 
             data = self.models[model.__tablename__]
@@ -195,17 +191,8 @@ class ImageSearch(object):
                 related_model = get_class_by_table(self.db.Model, foreign_key.column.table)
                 for key, prop in related_model().__mapper__._props.items():
                     if get_type(prop) == model:
-                        relationship = key
+                        data['relationships'][related_model.__tablename__] = key
                         break
-                else:
-                    continue
-                data['relations'].update({
-                    foreign_key.column.table.name: {
-                        'model': related_model,
-                        'model_column': foreign_key.column,
-                        'model_relationship': relationship,
-                    }
-                })
 
             # add events so that the changes on the database are reflected in indexed images.
             @event.listens_for(model, "after_delete")
@@ -290,26 +277,34 @@ class ImageSearch(object):
         data['features'][image_id] = self.feature_extract(image)  # save the features to the features dict
         return True
 
-    def index_model(self, model, replace=False):
+    def index_model(self, model, replace=False, threaded=True):
         """Index all the images in a model.
 
         :param model: The model containing the images to be indexed.
         :type model: flask_sqlalchemy.Model
         :param replace: Set to True to replace an existing index of this image, defaults to False
         :type replace: bool
+        :param threaded: Set this to true to make index_model non blocking.
+        :type threaded: bool
         """
-        entries = self.db.session.query(model).all()
+        def thread_content():
+            entries = self.db.session.query(model).all()
 
-        total = 0
-        indexed = 0
+            total = 0
+            indexed = 0
 
-        for entry in entries:
-            # index each entry
-            total += 1
-            if self.index(entry, replace):
-                indexed += 1
+            for entry in entries:
+                # index each entry
+                total += 1
+                if self.index(entry, replace):
+                    indexed += 1
 
-        logger.info(f"Indexed {indexed} of {total} images for the model {model.__tablename__}")
+            logger.info(f"Indexed {indexed} of {total} images for the model {model.__tablename__}")
+
+        if threaded:
+            threading.Thread(target=thread_content).start()
+        else:
+            thread_content()
 
     def delete_index(self, entry):
         """Delete an index
@@ -406,7 +401,7 @@ class ImageSearch(object):
 
             if join:
                 # update the exspression column statment
-                expression = data['relations'][query_model_.__tablename__]['model_relationship']
+                expression = data['relationships'][query_model_.__tablename__]
                 expression = f"{expression}.distance"
 
             whens = []

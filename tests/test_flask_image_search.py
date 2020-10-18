@@ -60,14 +60,13 @@ def image_model(db, image_search, radio_model):
         path = db.Column(db.String, nullable=False)
         radio_id = db.Column(db.Integer, db.ForeignKey(radio_model.id), nullable=False)
 
-    image_search.index_model(Image)
+    image_search.index_model(Image, threaded=False)
     return Image
 
 
 @pytest.mark.filterwarnings("ignore::DeprecationWarning:tensorflow")
 def test_indexed(image_model, image_search):
     """Test that images can be removed from the index correctly and reindexed."""
-    image_search.index_model(image_model)  # index any missing images
     original_features = image_search.features(image_model).copy()  # copy the features so they can be compared later
 
     # pick a random image to be removed from the index
@@ -76,7 +75,7 @@ def test_indexed(image_model, image_search):
 
     assert len(original_features) - 1 == len(image_search.features(image_model))
 
-    image_search.index_model(image_model)
+    image_search.index_model(image_model, threaded=False)
 
     assert len(original_features) == len(image_search.features(image_model))
 

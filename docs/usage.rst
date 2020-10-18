@@ -102,6 +102,11 @@ To index all images of a registered Model::
 
     image_search.index_model(Image)
 
+.. note::
+
+    index_model is run insude a thread so that it does not stop your flask app.
+    `threaded` can be set to `False` to stop it runing in a new thread.
+
 Once Images are indexed changes on the database will be reflected on the index.
 The indexes will be updated when an image is dropped, updated or a new image is added.
 
