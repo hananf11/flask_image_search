@@ -1,11 +1,12 @@
 import logging
 import os
 import threading
+from flask_sqlalchemy import model
 
 import numpy as np
 from PIL import Image
 from sqlalchemy import event, nullslast, literal_column
-from sqlalchemy.orm import query_expression, with_expression
+from sqlalchemy.orm import query_expression, with_expression, contains_eager
 from sqlalchemy.sql.expression import case
 from sqlalchemy_utils import get_class_by_table, get_query_entities, get_type
 
@@ -366,13 +367,17 @@ class ImageSearch(object):
             When this is set to None the query will be used to find this value.
         :type query_model: flask_sqlalchemy.Model
         :param join: Set this to join mode.
-        :type join: bool
+        :type join: bool or flask_sqlalchemy.Model
         :return: returns a function
         :rtype: function
         """
         def inner(query):
             image_model_ = image_model
             query_model_ = query_model
+
+            if join is not True and join is not False:
+                query = query.join(join).options(contains_eager(join))
+
             # if the image is none just do nothing to the query.
             if image is None:
                 return query

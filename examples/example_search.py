@@ -44,7 +44,7 @@ images = Image.query.image_search("test.jpg").all()
 print(images)
 
 # join search using query.image_search
-query = Radio.query.join(Radio.images).options(db.contains_eager(Radio.images))
-query = query.image_search("test.jpg", join=True)
+
+query = Radio.query.image_search("test.jpg", join=Radio.images)
 radios = query.all()
 print(radios)
