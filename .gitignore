@@ -105,3 +105,7 @@ ENV/
 .vscode/
 
 examples/image_search
+
+# Pipenv
+Pipfile
+Pipfile.lock
