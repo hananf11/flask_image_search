@@ -33,7 +33,7 @@ class Image(db.Model):
         return f"<Image {self.id} {self.radio.name}>"
 
 
-image_search.index_model(Image)  # index the model so it can be searched
+image_search.index_model(Image, threaded=False)  # index the model so it can be searched
 
 # search with an image using query_search
 images = Image.query.with_transformation(image_search.query_search("test.jpg")).all()
@@ -44,7 +44,7 @@ images = Image.query.image_search("test.jpg").all()
 print(images)
 
 # join search using query.image_search
-query = Radio.query.join(Radio.images).options(db.contains_eager(Radio.images))
-query = query.image_search("test.jpg", join=True)
+
+query = Radio.query.image_search("test.jpg", join=Radio.images)
 radios = query.all()
 print(radios)

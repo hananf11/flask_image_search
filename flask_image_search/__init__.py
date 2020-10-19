@@ -1,17 +1,18 @@
 import logging
 import os
 import threading
+from flask_sqlalchemy import model
 
 import numpy as np
 from PIL import Image
 from sqlalchemy import event, nullslast, literal_column
-from sqlalchemy.orm import query_expression, with_expression
+from sqlalchemy.orm import query_expression, with_expression, contains_eager
 from sqlalchemy.sql.expression import case
 from sqlalchemy_utils import get_class_by_table, get_query_entities, get_type
 
 __author__ = """Hanan Fokkens"""
 __email__ = 'hananfokkens@gmail.com'
-__version__ = '0.3.0'
+__version__ = '0.4.0'
 
 # get the logger
 logger = logging.getLogger(__name__)
@@ -51,8 +52,8 @@ class sdict(dict):
         if os.path.exists(self.file):
             with np.load(self.file) as file:
                 for key in file.files:
-                    # copy accross
-                    self.set(key, file[key])
+                    # copy accross without triggering save
+                    super().__setitem__(key, file[key])
 
     def __delitem__(self, name):
         super().__delitem__(name)
@@ -61,10 +62,6 @@ class sdict(dict):
     def __setitem__(self, name, value):
         super().__setitem__(name, value)
         self.save()
-
-    def set(self, name, value):
-        """Set a item without saving."""
-        super().__setitem__(name, value)
 
     def clear(self):
         super().clear()
@@ -186,7 +183,7 @@ class ImageSearch(object):
                 id=id,
                 path=path,
                 ignore=ignore if hasattr(model, ignore) else False,
-                relations={}
+                relationships={}
             )
 
             data = self.models[model.__tablename__]
@@ -195,18 +192,8 @@ class ImageSearch(object):
                 related_model = get_class_by_table(self.db.Model, foreign_key.column.table)
                 for key, prop in related_model().__mapper__._props.items():
                     if get_type(prop) == model:
-                        relationship = key
+                        data['relationships'][related_model.__tablename__] = key
                         break
-                else:
-                    continue
-                data['relations'].update({
-                    foreign_key.column.table.name: {
-                        'model': related_model,
-                        'model_column': foreign_key.column,
-                        'model_relationship': relationship,
-                        'column': foreign_key.parent
-                    }
-                })
 
             # add events so that the changes on the database are reflected in indexed images.
             @event.listens_for(model, "after_delete")
@@ -246,24 +233,6 @@ class ImageSearch(object):
             model = model.__tablename__
         return self.models[model]['features']
 
-    def image_id(self, entry):
-        """Helper function to genarate the id used to identify an image
-
-        :param entry: The model instance to get the id from
-        :type entry: flask_sqlalchemy.Model
-        """
-        data = self.models[entry.__tablename__]  # get the data for this entry
-
-        # create list of the parts for the image id
-        image_id_parts = [str(getattr(entry, data['id']))]
-
-        # add all the foreign keys to the image_id_parts list
-        for relation in data['relations'].values():
-            image_id_parts.append(str(getattr(entry, relation['column'].name)))
-
-        image_id = "_".join(image_id_parts)  # join all the parts with an underscore
-        return image_id
-
     def feature_extract(self, image):
         """This is a helper function that takes an image processes it and returns the features.
 
@@ -297,7 +266,7 @@ class ImageSearch(object):
 
         image_path = getattr(entry, data['path'])  # get the image path
 
-        image_id = self.image_id(entry)
+        image_id = str(getattr(entry, data['id']))
 
         if not replace and image_id in data['features']:
             # if the image isn't allowed to be reindexed and it already is indexed skip it
@@ -309,26 +278,34 @@ class ImageSearch(object):
         data['features'][image_id] = self.feature_extract(image)  # save the features to the features dict
         return True
 
-    def index_model(self, model, replace=False):
+    def index_model(self, model, replace=False, threaded=True):
         """Index all the images in a model.
 
         :param model: The model containing the images to be indexed.
         :type model: flask_sqlalchemy.Model
         :param replace: Set to True to replace an existing index of this image, defaults to False
         :type replace: bool
+        :param threaded: Set this to true to make index_model non blocking.
+        :type threaded: bool
         """
-        entries = self.db.session.query(model).all()
+        def thread_content():
+            entries = self.db.session.query(model).all()
 
-        total = 0
-        indexed = 0
+            total = 0
+            indexed = 0
 
-        for entry in entries:
-            # index each entry
-            total += 1
-            if self.index(entry, replace):
-                indexed += 1
+            for entry in entries:
+                # index each entry
+                total += 1
+                if self.index(entry, replace):
+                    indexed += 1
 
-        logger.info(f"Indexed {indexed} of {total} images for the model {model.__tablename__}")
+            logger.info(f"Indexed {indexed} of {total} images for the model {model.__tablename__}")
+
+        if threaded:
+            threading.Thread(target=thread_content).start()
+        else:
+            thread_content()
 
     def delete_index(self, entry):
         """Delete an index
@@ -339,7 +316,7 @@ class ImageSearch(object):
         data = self.models[entry.__tablename__]  # get the data related to this entry
 
         # get the image id
-        image_id = self.image_id(entry)
+        image_id = str(getattr(entry, data['id']))
         try:
             del data['features'][image_id]
         except KeyError:
@@ -390,13 +367,17 @@ class ImageSearch(object):
             When this is set to None the query will be used to find this value.
         :type query_model: flask_sqlalchemy.Model
         :param join: Set this to join mode.
-        :type join: bool
+        :type join: bool or flask_sqlalchemy.Model
         :return: returns a function
         :rtype: function
         """
         def inner(query):
             image_model_ = image_model
             query_model_ = query_model
+
+            if join is not True and join is not False:
+                query = query.join(join).options(contains_eager(join))
+
             # if the image is none just do nothing to the query.
             if image is None:
                 return query
@@ -425,7 +406,7 @@ class ImageSearch(object):
 
             if join:
                 # update the exspression column statment
-                expression = data['relations'][query_model_.__tablename__]['model_relationship']
+                expression = data['relationships'][query_model_.__tablename__]
                 expression = f"{expression}.distance"
 
             whens = []

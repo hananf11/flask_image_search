@@ -44,8 +44,7 @@ def home():
             return redirect("/")
         image = PILImage.open(f)
         images = Image.query.image_search(image).all()
-        query = Radio.query.join(Radio.images).options(db.contains_eager(Radio.images)) \
-            .image_search("test.jpg", join=True)
+        query = Radio.query.image_search("test.jpg", join=Radio.images)
         radios = query.all()
 
     return render_template_string("""
