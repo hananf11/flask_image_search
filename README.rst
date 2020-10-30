@@ -6,7 +6,7 @@ Flask Image Search
 .. image:: https://img.shields.io/pypi/v/flask_image_search.svg
         :target: https://pypi.python.org/pypi/flask_image_search
 
-.. image:: https://img.shields.io/travis/hananf11/flask_image_search.svg
+.. image:: https://img.shields.io/travis/com/hananf11/flask_image_search.svg
         :target: https://travis-ci.com/hananf11/flask_image_search
 
 .. image:: https://readthedocs.org/projects/flask-image-search/badge/?version=latest
