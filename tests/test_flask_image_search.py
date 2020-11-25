@@ -19,21 +19,14 @@ logger.setLevel(logging.INFO)
 BASE_PATH = os.path.dirname(os.path.realpath(__file__))
 
 
-@pytest.fixture
-def app():
+@pytest.fixture(name="app")
+def fixture_app():
     """Fixture that returns an instance of FLask."""
     return Flask(__name__)
 
 
-@pytest.fixture
-def image_search(app):
-    """Fixture that returns an instance of image search."""
-
-    return ImageSearch(app)
-
-
-@pytest.fixture
-def db(app):
+@pytest.fixture(name="db")
+def fixture_flask_sqlalchemy(app):
     app.config.update({
         "SQLALCHEMY_DATABASE_URI": "sqlite:///test.db",
         "SQLALCHEMY_TRACK_MODIFICATIONS": False
@@ -41,8 +34,19 @@ def db(app):
     return SQLAlchemy(app)
 
 
-@pytest.fixture
-def radio_model(db):
+@pytest.fixture(name="image_search")
+def fixture_image_search(app, request):
+    """Fixture that returns an instance of image search."""
+    params = getattr(request, "params", {})
+
+    app.config.update({"IMAGE_SEARCH_PATH_PREFIX": params.get("path_prefix", "image_search/")})
+
+    return ImageSearch(app)
+
+
+@pytest.fixture(name="radio_model")
+def fixture_radio_model(db):
+
     class Radio(db.Model):
         id = db.Column(db.Integer, primary_key=True)
         name = db.Column(db.Text)
@@ -51,8 +55,8 @@ def radio_model(db):
     return Radio
 
 
-@pytest.fixture
-def image_model(db, image_search, radio_model):
+@pytest.fixture(name="image_model")
+def fixture_image_model(db, image_search, radio_model):
 
     @image_search.register()
     class Image(db.Model):
@@ -64,20 +68,24 @@ def image_model(db, image_search, radio_model):
     return Image
 
 
+# @pytest.mark.parametrize("image_search", [{}, {"path_prefix": "image_search_2/"}], indirect=True)
 @pytest.mark.filterwarnings("ignore::DeprecationWarning:tensorflow")
-def test_indexed(image_model, image_search):
-    """Test that images can be removed from the index correctly and reindexed."""
-    original_features = image_search.features(image_model).copy()  # copy the features so they can be compared later
+def test_index_image(image_model, image_search):
+    """Test that indexing images is working correctly"""
+    original_features = image_search.features(image_model).copy()  # get a copy of the current features
 
-    # pick a random image to be removed from the index
+    # choose a random image to delete from the image index
     image_to_be_deleted = image_model.query.order_by(func.random()).first()
-    image_search.delete_index(image_to_be_deleted)  # remove an index
+    image_search.delete_index(image_to_be_deleted)
 
+    # check that the image was removed from the index
     assert len(original_features) - 1 == len(image_search.features(image_model))
 
-    image_search.index_model(image_model, threaded=False)
+    image_search.index_model(image_model, threaded=False)  # index all missing images
 
-    assert len(original_features) == len(image_search.features(image_model))
+    # check the features extracted haven't changed
+    new_features = image_search.features(image_model).copy()
+    assert [original_features[key] == new_features[key] for key in new_features]
 
 
 def test_search(image_model, image_search):
@@ -86,7 +94,7 @@ def test_search(image_model, image_search):
     assert [result[0] for result in results[:5]] == ["4512", "2649", "4514", "4516", "2194"]
 
 
-def test_query_search(image_model, image_search):
+def test_query_search(image_model):
     images = image_model.query.image_search(os.path.join(BASE_PATH, "./test.jpg")).all()
     # check that the correct Images were returned
     assert [image.id for image in images[:5]] == [4512, 2649, 4514, 4516, 2194]
@@ -100,7 +108,7 @@ def test_transform_query_search(image_model, image_search):
     assert [image.id for image in images[:5]] == [4512, 2649, 4514, 4516, 2194]
 
 
-def test_query_search_join(db, image_model, radio_model, image_search):
+def test_query_search_join(db, image_model, radio_model):
     query = radio_model.query.join(image_model).options(db.contains_eager(radio_model.images))
     query = query.image_search(os.path.join(BASE_PATH, "./test.jpg"), join=True)
     radios = query.all()[:3]
