@@ -7,7 +7,7 @@ from PIL import Image
 from sqlalchemy import event, nullslast, literal_column
 from sqlalchemy.orm import query_expression, with_expression, contains_eager
 from sqlalchemy.sql.expression import case
-from sqlalchemy_utils import get_class_by_table, get_query_entities, get_type
+from sqlalchemy_utils import get_query_entities, get_type, get_type
 
 __author__ = """Hanan Fokkens"""
 __email__ = "hananfokkens@gmail.com"
@@ -182,17 +182,9 @@ class ImageSearch(object):
                 id=id,
                 path=path,
                 ignore=ignore if hasattr(model, ignore) else False,
-                relationships={}
             )
 
             data = self.models[model.__tablename__]
-
-            for foreign_key in model.__table__.foreign_keys:
-                related_model = get_class_by_table(self.db.Model, foreign_key.column.table)
-                for key, prop in related_model().__mapper__._props.items():
-                    if get_type(prop) == model:
-                        data["relationships"][related_model.__tablename__] = key
-                        break
 
             # add events so that the changes on the database are reflected in indexed images.
             @event.listens_for(model, "after_delete")
@@ -404,9 +396,11 @@ class ImageSearch(object):
             id_column = getattr(image_model_, data["id"])
 
             if join:
+
                 # update the exspression column statment
-                expression = data["relationships"][query_model_.__tablename__]
-                expression = f"{expression}.distance"
+                for key, value in query_model_.__mapper__._props.items():
+                    if get_type(value) is image_model_:
+                        expression = f"{key}.distance"
 
             whens = []
 

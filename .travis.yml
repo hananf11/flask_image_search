@@ -2,9 +2,9 @@
 
 language: python
 python:
-- 3.8
-- 3.7
-- 3.6
+    - 3.8
+    - 3.7
+    - 3.6
 
 # Command to install dependencies, e.g. pip install -r requirements.txt --use-mirrors
 install: pip install -U tox-travis
@@ -21,12 +21,12 @@ dist: focal
 # following command to finish PyPI deployment setup:
 # $ travis encrypt --add deploy.password
 deploy:
-  provider: pypi
-  distributions: sdist bdist_wheel
-  username: __token__
-  password:
-    secure: DyZJ446PLvKywKx2eIxW6YSYNKXyo0f5Mq3KFfiXsrb7Cwf9DUd6IMXeXOzI7T9yJL3tKYakTeg26Rn36g2G/P1VtTOlA9tbZ7QCxWBaOpSdwt4HoUqcylxYqqTayJcTkTaUMmyxH+qRYbRnwEQIzHTgC5TqP5XfbauEkGaV2US7DzbowTu9eHFhLbu6GlaiRhOdByPMZqGDcfFor092+2RcGxwqN9wRVXNP6r5Ei1+3cevxcuQ2AJpG6CDUS5NReDXcDUodCAdvfqDnMN3Kvioiq/EQPEDJg7rKPW6pOJvOAEEB44HVvGMH3xt4B/Ysa8P6bsfovoACuIP6XgHDkP6QHtHgNJ6zzRZfLz8YCT8q9bNNXknPgOn1yZO9ZXhAgS30uo4KnWhmqy54y+N3ds/EiQPgSzZQ6ZLQwLHQQiXes9i0uFhx319ffPMMTTItOheVbwKFsFewmLWjXxApEHqYdHh0LYjFYEOv0oBefiH9vA94vXSuV+Im8BpDb+434d5GWfLlkRUn1e8rTPtngaKDfXNSaVI6+tJSa53P7wceu6LF3AVdGV38BK87D7Uv+zZVAwVF7cSJ4oJgT7jPti/UYorsagmEEyAOe7ZG6eZSUrXOB4EeflglIAO1SIqZR3cBJpvz3gYsz/qRdBBDwRZ45YMUo3nObsdIHQgT+QY=
-  on:
-    tags: true
-    repo: hananf11/flask_image_search
-    python: 3.8
+    provider: pypi
+    distributions: sdist bdist_wheel
+    username: __token__
+    password:
+        secure: JAJc3RFZ2jJSnf3X/DxIrL7VVrmV40nvsBHIS1ZtRSUcbx/kc3xC39zEtKIRrRXSbFNVCNkYxhNs1MKi7s/RFFA8ts2NKNrES6Q1zRa/usHsaXDuxwlWwJc9t/i1I1D4IFAhxdhfky2fU0VkZHhkz/pJV/0Ho9WhV0b8CUrZ6jTBHCfwOIZgHIQeJZCPBm/Bi4cRHbV7YbCwOcl1EMIF+CuWAcED5Tdx5lOnYUcQPK1EU/4xHAQI9T+dg5PJUZpoWFFxQpOVL48olIURW6K1PjaxK2SshM37Abon3L5qGhYMlMe25Qg3IKi64vbSnrj9qNzWIsSJX9BrnfbrI7aOuNJV3XJsk4zypy9WeIVNDOcNwTIwJmqlObcdhxdl1wEDi6ajJ43gkM8OX+CmQXLyGt9yXkfXN7HzKST2XZ3/p0vcrW1OUCkl8RogpN6G+oUZOA1Kl/9kLpmRSMEV7ZWg9FJY6hDxnya9jljrN9SpzP8Gn2pkEQxDkAdO5f4GIOrTAX9FD0QRMdHpv0FP4t4mf2jPlKebYOh1D5f5R/DYSdFDvPASGXHDkWoLhdp9keICDmldhRfk2EfPimZolvTSrqPqgaqh0qbqRWhEL58EjpVryfp8CRYb6N9bp1ADC4Az7Mc12YwAnlWpD1RJC/CLzqZSiKYizQ9jTxPFQ6UUw/A=
+    on:
+        tags: true
+        repo: hananf11/flask_image_search
+        python: 3.8
