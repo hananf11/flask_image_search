@@ -7,7 +7,7 @@ from PIL import Image
 from sqlalchemy import event, nullslast, literal_column
 from sqlalchemy.orm import query_expression, with_expression, contains_eager
 from sqlalchemy.sql.expression import case
-from sqlalchemy_utils import get_query_entities, get_type, get_type
+from sqlalchemy_utils import get_query_entities, get_type
 
 __author__ = """Hanan Fokkens"""
 __email__ = "hananfokkens@gmail.com"
