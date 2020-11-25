@@ -1,7 +1,6 @@
 import logging
 import os
 import threading
-from flask_sqlalchemy import model
 
 import numpy as np
 from PIL import Image
@@ -11,13 +10,13 @@ from sqlalchemy.sql.expression import case
 from sqlalchemy_utils import get_class_by_table, get_query_entities, get_type
 
 __author__ = """Hanan Fokkens"""
-__email__ = 'hananfokkens@gmail.com'
-__version__ = '0.4.0'
+__email__ = "hananfokkens@gmail.com"
+__version__ = "0.4.0"
 
 # get the logger
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter('%(asctime)s flask image search: %(message)s'))
+handler.setFormatter(logging.Formatter("%(asctime)s flask image search: %(message)s"))
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
@@ -136,7 +135,7 @@ class ImageSearch(object):
         self.path_prefix = app.config["IMAGE_SEARCH_PATH_PREFIX"]
         self._tensorflow = tensorflow
 
-        sqlalchemy = app.extensions.get('sqlalchemy')
+        sqlalchemy = app.extensions.get("sqlalchemy")
 
         if sqlalchemy is None:
             raise Exception("You need to initialize Flask-SQLAlchemy before Flask-Image-Search.")
@@ -146,7 +145,7 @@ class ImageSearch(object):
         self.db.Query.image_search = lambda self_, *args, **kwargs: self.query_search(*args, **kwargs)(self_)
 
         if tensorflow:
-            os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # set tensorflow debug level to only show errors
+            os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # set tensorflow debug level to only show errors
 
             from keras.applications.vgg16 import VGG16, preprocess_input
             from keras.preprocessing import image
@@ -156,26 +155,26 @@ class ImageSearch(object):
             self.__preprocess_input = preprocess_input
             self.__keras_image = image
             # create a model where the layer before the final base_model node is the output
-            # self.__keras_model = KerasModel(inputs=base_model.input, output=base_model.get_layer('fc1').output)
-            base_model = VGG16(weights='imagenet')
-            self.__keras_model = KerasModel(inputs=base_model.input, outputs=base_model.get_layer('fc1').output)
+            # self.__keras_model = KerasModel(inputs=base_model.input, output=base_model.get_layer("fc1").output)
+            base_model = VGG16(weights="imagenet")
+            self.__keras_model = KerasModel(inputs=base_model.input, outputs=base_model.get_layer("fc1").output)
         self.models = {}
 
-    def register(self, id='id', path='path', ignore='ignore'):
+    def register(self, id="id", path="path", ignore="ignore"):
         """This decorator is used to register Flask-SQLAlchemy Model with  the image search.
         After a model is registered it can then indexed and searched.
 
-        :param id: This is the name of the primary_key column. Defaults to 'id'.
+        :param id: This is the name of the primary_key column. Defaults to "id".
         :type id: str
-        :param path: This is the name of the column containing the image path. Defaults to 'path'.
+        :param path: This is the name of the column containing the image path. Defaults to "path".
         :type path: str
         :param ignore: This is the name of the column used to decide if an image should be ignored.
-            defaults to 'ignore'.
+            defaults to "ignore".
         :type ignore: str
         """
         def inner(model):
             # work out the file path
-            file_path = os.path.join(self.root, self.path_prefix + model.__tablename__ + '.npz')
+            file_path = os.path.join(self.root, self.path_prefix + model.__tablename__ + ".npz")
 
             # Store the information about this model in the models dict.
             self.models[model.__tablename__] = dict(
@@ -192,7 +191,7 @@ class ImageSearch(object):
                 related_model = get_class_by_table(self.db.Model, foreign_key.column.table)
                 for key, prop in related_model().__mapper__._props.items():
                     if get_type(prop) == model:
-                        data['relationships'][related_model.__tablename__] = key
+                        data["relationships"][related_model.__tablename__] = key
                         break
 
             # add events so that the changes on the database are reflected in indexed images.
@@ -231,7 +230,7 @@ class ImageSearch(object):
         """
         if type(model) is not str:
             model = model.__tablename__
-        return self.models[model]['features']
+        return self.models[model]["features"]
 
     def feature_extract(self, image):
         """This is a helper function that takes an image processes it and returns the features.
@@ -240,7 +239,7 @@ class ImageSearch(object):
         :type image: PIL.Image.Image
         """
         if self._tensorflow:
-            image = image.resize((224, 224)).convert('RGB')  # resize the image and convert to RGB
+            image = image.resize((224, 224)).convert("RGB")  # resize the image and convert to RGB
             image_array = self.__keras_image.img_to_array(image)  # turn image into np array
             image_array = np.expand_dims(image_array, axis=0)  # expand the shape of array
             input_array = self.__preprocess_input(image_array)
@@ -260,22 +259,22 @@ class ImageSearch(object):
         """
         data = self.models[entry.__tablename__]  # get the data for this entry
 
-        if data['ignore'] and getattr(entry, data['ignore']):
+        if data["ignore"] and getattr(entry, data["ignore"]):
             # if this model is ignored return false
             return False
 
-        image_path = getattr(entry, data['path'])  # get the image path
+        image_path = getattr(entry, data["path"])  # get the image path
 
-        image_id = str(getattr(entry, data['id']))
+        image_id = str(getattr(entry, data["id"]))
 
-        if not replace and image_id in data['features']:
+        if not replace and image_id in data["features"]:
             # if the image isn't allowed to be reindexed and it already is indexed skip it
             return True
 
         # open image
         image = Image.open(os.path.join(self.root, image_path))
 
-        data['features'][image_id] = self.feature_extract(image)  # save the features to the features dict
+        data["features"][image_id] = self.feature_extract(image)  # save the features to the features dict
         return True
 
     def index_model(self, model, replace=False, threaded=True):
@@ -316,9 +315,9 @@ class ImageSearch(object):
         data = self.models[entry.__tablename__]  # get the data related to this entry
 
         # get the image id
-        image_id = str(getattr(entry, data['id']))
+        image_id = str(getattr(entry, data["id"]))
         try:
-            del data['features'][image_id]
+            del data["features"][image_id]
         except KeyError:
             raise KeyError("That Image is not indexed.")
 
@@ -342,7 +341,7 @@ class ImageSearch(object):
 
         search_features = self.feature_extract(image)  # extract the features form the search image.
 
-        ids, features = zip(*self.models[model]['features'].items())
+        ids, features = zip(*self.models[model]["features"].items())
 
         # get the distance between all the indexed images and the search image.
         distances = np.linalg.norm(features - search_features, axis=1)
@@ -402,11 +401,11 @@ class ImageSearch(object):
             results = self.search(image_model_, image)  # get the ids and distances
 
             # get the id column so it can be used in the case statment
-            id_column = getattr(image_model_, data['id'])
+            id_column = getattr(image_model_, data["id"])
 
             if join:
                 # update the exspression column statment
-                expression = data['relationships'][query_model_.__tablename__]
+                expression = data["relationships"][query_model_.__tablename__]
                 expression = f"{expression}.distance"
 
             whens = []

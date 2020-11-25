@@ -20,7 +20,7 @@ class Radio(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String, nullable=False)
 
-    images = db.relationship('Image', backref="radio")
+    images = db.relationship("Image", backref="radio")
 
 
 @image_search.register()
@@ -38,7 +38,7 @@ def home():
     images = []
     radios = []
     if request.method == "POST":
-        f = request.files.get('image')
+        f = request.files.get("image")
         if not f:
             flash("Failed to get image")
             return redirect("/")
@@ -92,5 +92,5 @@ def home():
     """, images=images, radios=radios)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True)

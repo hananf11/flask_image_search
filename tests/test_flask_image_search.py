@@ -12,7 +12,7 @@ from flask_image_search import ImageSearch
 
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter('%(asctime)s Testing: %(message)s'))
+handler.setFormatter(logging.Formatter("%(asctime)s Testing: %(message)s"))
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
@@ -83,7 +83,7 @@ def test_indexed(image_model, image_search):
 def test_search(image_model, image_search):
     results = image_search.search(image_model, os.path.join(BASE_PATH, "./test.jpg"))
     # check that the results are correct by checking the ids
-    assert [result[0] for result in results[:5]] == ['4512', '2649', '4514', '4516', '2194']
+    assert [result[0] for result in results[:5]] == ["4512", "2649", "4514", "4516", "2194"]
 
 
 def test_query_search(image_model, image_search):
