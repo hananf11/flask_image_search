@@ -6,6 +6,8 @@ import os
 import pytest
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
+from keras.applications import inception_v3, vgg19
+from keras.models import Model as KerasModel
 from sqlalchemy.sql.expression import func
 
 from flask_image_search import ImageSearch
@@ -37,11 +39,24 @@ def fixture_flask_sqlalchemy(app):
 @pytest.fixture(name="image_search")
 def fixture_image_search(app, request):
     """Fixture that returns an instance of image search."""
-    params = getattr(request, "params", {})
+    params = getattr(request, "param", {})
 
-    app.config.update({"IMAGE_SEARCH_PATH_PREFIX": params.get("path_prefix", "image_search/")})
+    class MyImageSearch(ImageSearch):
+        if params.get("model"):
+            def create_keras_model(self):
+                base_model = params["model"]
+                base_model = base_model(weights="imagenet")
 
-    return ImageSearch(app)
+                inputs = base_model.input
+                outputs = base_model.get_layer(params["out"]).output
+                return KerasModel(inputs=inputs, outputs=outputs)
+
+            def preprocess_image_array(self, image_array):
+                return params["preprocess"](image_array)
+
+    app.config.update({"IMAGE_SEARCH_PATH_PREFIX": params.get("path_prefix", "image_search_vgg16/")})
+
+    return MyImageSearch(app)
 
 
 @pytest.fixture(name="radio_model")
@@ -69,7 +84,28 @@ def fixture_image_model(db, image_search, radio_model):
 
 
 # @pytest.mark.parametrize("image_search", [{}, {"path_prefix": "image_search_2/"}], indirect=True)
+
+vgg19_test_case = {
+    "path_prefix": "image_search_vgg19/",
+    "model": vgg19.VGG19,
+    "preprocess": vgg19.preprocess_input,
+    "out": "fc1"
+}
+
+inception_v3_test_case = {
+    "path_prefix": "image_search_inception_v3/",
+    "model": inception_v3.InceptionV3,
+    "preprocess": inception_v3.preprocess_input,
+    "out": "avg_pool"
+}
+
+
 @pytest.mark.filterwarnings("ignore::DeprecationWarning:tensorflow")
+@pytest.mark.parametrize("image_search", [
+    {},
+    vgg19_test_case,
+    inception_v3_test_case,
+], indirect=["image_search"])
 def test_index_image(image_model, image_search):
     """Test that indexing images is working correctly"""
     original_features = image_search.features(image_model).copy()  # get a copy of the current features
@@ -88,16 +124,26 @@ def test_index_image(image_model, image_search):
     assert [original_features[key] == new_features[key] for key in new_features]
 
 
-def test_search(image_model, image_search):
+@pytest.mark.parametrize("image_search, expected", [
+    ({}, ["4512", "2649", "4514", "4516", "2194"]),
+    (vgg19_test_case, ["2649", "4512", "4514", "2197", "4516"]),
+    (inception_v3_test_case, ["4512", "4516", "4514", "5171", "2649"]),
+], indirect=["image_search"])
+def test_search(image_model, image_search, expected):
     results = image_search.search(image_model, os.path.join(BASE_PATH, "./test.jpg"))
     # check that the results are correct by checking the ids
-    assert [result[0] for result in results[:5]] == ["4512", "2649", "4514", "4516", "2194"]
+    assert [result[0] for result in results[:5]] == expected
 
 
-def test_query_search(image_model):
+@pytest.mark.parametrize("image_search, expected", [
+    ({}, [4512, 2649, 4514, 4516, 2194]),
+    (vgg19_test_case, [2649, 4512, 4514, 2197, 4516]),
+    (inception_v3_test_case, [4512, 4516, 4514, 5171, 2649]),
+], indirect=["image_search"])
+def test_query_search(image_model, expected):
     images = image_model.query.image_search(os.path.join(BASE_PATH, "./test.jpg")).all()
     # check that the correct Images were returned
-    assert [image.id for image in images[:5]] == [4512, 2649, 4514, 4516, 2194]
+    assert [image.id for image in images[:5]] == expected
 
 
 def test_transform_query_search(image_model, image_search):
@@ -108,14 +154,38 @@ def test_transform_query_search(image_model, image_search):
     assert [image.id for image in images[:5]] == [4512, 2649, 4514, 4516, 2194]
 
 
-def test_query_search_join(db, image_model, radio_model):
+@pytest.mark.parametrize("image_search, expected_radios, expected_images_1, expected_images_2, expected_images_3", [
+    (
+        {},
+        [439, 371, 438],
+        [4512, 2649, 2204, 4513, 5115, 5117, 5116],
+        [4514, 4516, 4517, 4518, 1798, 1799, 4515, 4519, 1800],
+        [2194, 2197, 2196, 2193, 2195]
+    ),
+    (
+        vgg19_test_case,
+        [439, 371, 438],
+        [2649, 4512, 2204, 4513, 5115, 5117, 5116],
+        [4514, 4516, 4517, 4518, 4515, 1798, 4519, 1799, 1800],
+        [2197, 2194, 2196, 2195, 2193]
+    ),
+    (
+        inception_v3_test_case,
+        [439, 371, 1011],
+        [4512, 2649, 2204, 4513, 5116, 5117, 5115],
+        [4516, 4514, 1798, 4519, 4515, 1800, 4518, 4517, 1799],
+        [5171, 5172, 5170, 5173, 5178, 5180, 5177, 5179, 5175, 5176, 5174, 5181]
+    ),
+], indirect=["image_search"])
+def test_query_search_join(db, image_model, radio_model, expected_radios, expected_images_1, expected_images_2,
+                           expected_images_3):
     query = radio_model.query.join(image_model).options(db.contains_eager(radio_model.images))
     query = query.image_search(os.path.join(BASE_PATH, "./test.jpg"), join=True)
     radios = query.all()[:3]
     for radio in radios:
         for image in radio.images:
             assert image.radio_id == radio.id
-    assert [model.id for model in radios] == [439, 371, 438]
-    assert [image.id for image in radios[0].images] == [4512, 2649, 2204, 4513, 5115, 5117, 5116]
-    assert [image.id for image in radios[1].images] == [4514, 4516, 4517, 4518, 1798, 1799, 4515, 4519, 1800]
-    assert [image.id for image in radios[2].images] == [2194, 2197, 2196, 2193, 2195]
+    assert [model.id for model in radios] == expected_radios
+    assert [image.id for image in radios[0].images] == expected_images_1
+    assert [image.id for image in radios[1].images] == expected_images_2
+    assert [image.id for image in radios[2].images] == expected_images_3

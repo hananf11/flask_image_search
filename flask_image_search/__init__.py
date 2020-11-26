@@ -3,9 +3,12 @@ import os
 import threading
 
 import numpy as np
+from keras.applications.vgg16 import VGG16, preprocess_input
+from keras.models import Model as KerasModel
+from keras.preprocessing import image as keras_image
 from PIL import Image
-from sqlalchemy import event, nullslast, literal_column
-from sqlalchemy.orm import query_expression, with_expression, contains_eager
+from sqlalchemy import event, literal_column, nullslast
+from sqlalchemy.orm import contains_eager, query_expression, with_expression
 from sqlalchemy.sql.expression import case
 from sqlalchemy_utils import get_query_entities, get_type
 
@@ -19,6 +22,8 @@ handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter("%(asctime)s flask image search: %(message)s"))
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # set tensorflow debug level to only show errors
 
 
 class sdict(dict):
@@ -124,41 +129,39 @@ class ImageSearch(object):
         :param app: The Flask app for this project.
         :type app: flask.Flask
         :param tensorflow: Should tensorflow be used,
-            tensorflow can be dissabled to make working on other parts of your app eaiser
+            tensorflow can be dissabled to make working on other parts of your app easier
             defaults to True
         :type tensorflow: bool
         :raises Exception: Exception may be raised if Flask-SQLAlchemy is not initialized.
         """
         app.config.setdefault("IMAGE_SEARCH_PATH_PREFIX", "image_search/")
 
-        self.root = app.root_path
+        # get the path_prefix and the app root
         self.path_prefix = app.config["IMAGE_SEARCH_PATH_PREFIX"]
-        self._tensorflow = tensorflow
+        self.root = app.root_path
 
+        # get db from sqlalchemy
         sqlalchemy = app.extensions.get("sqlalchemy")
-
         if sqlalchemy is None:
             raise Exception("You need to initialize Flask-SQLAlchemy before Flask-Image-Search.")
-
         self.db = sqlalchemy.db
 
+        # add alias to query_search in db.Query
         self.db.Query.image_search = lambda self_, *args, **kwargs: self.query_search(*args, **kwargs)(self_)
 
         if tensorflow:
-            os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # set tensorflow debug level to only show errors
-
-            from keras.applications.vgg16 import VGG16, preprocess_input
-            from keras.preprocessing import image
-            from keras.models import Model as KerasModel
-
-            # this function is used to preprocess the values before they are put into the keras model
-            self.__preprocess_input = preprocess_input
-            self.__keras_image = image
-            # create a model where the layer before the final base_model node is the output
-            # self.__keras_model = KerasModel(inputs=base_model.input, output=base_model.get_layer("fc1").output)
-            base_model = VGG16(weights="imagenet")
-            self.__keras_model = KerasModel(inputs=base_model.input, outputs=base_model.get_layer("fc1").output)
+            self.keras_model = self.create_keras_model()
+        else:
+            self.keras_model = None
         self.models = {}
+
+    def create_keras_model(self):
+        """This functions exists so that `tensorflow=False` works with a custom model."""
+        base_model = VGG16(weights="imagenet")
+        return KerasModel(inputs=base_model.input, outputs=base_model.get_layer("fc1").output)
+
+    def preprocess_image_array(self, image_array):
+        return preprocess_input(image_array)
 
     def register(self, id="id", path="path", ignore="ignore"):
         """This decorator is used to register Flask-SQLAlchemy Model with  the image search.
@@ -230,13 +233,14 @@ class ImageSearch(object):
         :param image: The image to get the features from.
         :type image: PIL.Image.Image
         """
-        if self._tensorflow:
-            image = image.resize((224, 224)).convert("RGB")  # resize the image and convert to RGB
-            image_array = self.__keras_image.img_to_array(image)  # turn image into np array
+        if self.keras_model:
+            image_size = self.keras_model.inputs[0].shape[1:3]
+            image = image.resize(image_size).convert("RGB")  # resize the image and convert to RGB
+            image_array = keras_image.img_to_array(image)  # turn image into np array
             image_array = np.expand_dims(image_array, axis=0)  # expand the shape of array
-            input_array = self.__preprocess_input(image_array)
+            input_array = self.preprocess_image_array(image_array)
 
-            feature = self.__keras_model.predict(input_array)[0]  # process
+            feature = self.keras_model.predict(input_array)[0]  # process
             return feature / np.linalg.norm(feature)  # normalize the features
         else:
             return np.random.rand(4096)
