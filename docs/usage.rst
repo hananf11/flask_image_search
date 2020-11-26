@@ -33,6 +33,15 @@ Alternatively you if you're using a `factory`_::
 
 .. _factory: https://flask.palletsprojects.com/en/1.1.x/patterns/appfactories/#basic-factories
 
+.. note::
+    flask_image_search loads keras/tensorflow when it is initialized,
+    this can become a real pain when debugging your flask app,
+    to stop tensorflow from loading and annoying you::
+
+        image_search = ImageSearch(app, tensorflow=False)
+
+    when tensorflow is disabled the image search will return random results.
+
 Config
 ------
 
