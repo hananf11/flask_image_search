@@ -170,3 +170,32 @@ It is possible to search a Model that does not contain images but is related to 
 Short hand::
 
     animals = Animals.query.image_search('my_image.jpg', join=Animals.images).all()
+
+Advanced
+--------
+
+Changing Keras Model
+^^^^^^^^^^^^^^^^^^^^
+
+By default `flask_image_search` uses the `VGG16`_ for it's feature extraction.
+You can change the keras model used for feature extraction by overriding some of the :class:`ImageSearch` class methods.
+Here is an example using `InceptionV3`_::
+
+    from flask_image_search import ImageSearch
+    from keras.applications.inception_v3 import InceptionV3, preprocess_input
+    from keras.models import Model as KerasModel
+
+
+    class MyImageSearch(ImageSearch):
+        @staticmethod
+        def create_keras_model():
+            base_model = InceptionV3(weights="imagenet")
+            return KerasModel(inputs=base_model.input, outputs=base_model.get_layer("avg_pool").output)
+
+        @staticmethod
+        def preprocess_image_array(image_array):
+            return preprocess_input(image_array)
+
+
+.. _VGG16: https://keras.io/api/applications/vgg/#vgg16-function
+.. _InceptionV3: https://keras.io/api/applications/inceptionv3/
