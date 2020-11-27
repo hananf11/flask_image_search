@@ -155,12 +155,14 @@ class ImageSearch(object):
             self.keras_model = None
         self.models = {}
 
-    def create_keras_model(self):
+    @staticmethod
+    def create_keras_model():
         """This functions exists so that `tensorflow=False` works with a custom model."""
         base_model = VGG16(weights="imagenet")
         return KerasModel(inputs=base_model.input, outputs=base_model.get_layer("fc1").output)
 
-    def preprocess_image_array(self, image_array):
+    @staticmethod
+    def preprocess_image_array(image_array):
         return preprocess_input(image_array)
 
     def register(self, id="id", path="path", ignore="ignore"):

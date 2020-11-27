@@ -43,7 +43,8 @@ def fixture_image_search(app, request):
 
     class MyImageSearch(ImageSearch):
         if params.get("model"):
-            def create_keras_model(self):
+            @staticmethod
+            def create_keras_model():
                 base_model = params["model"]
                 base_model = base_model(weights="imagenet")
 
@@ -51,7 +52,8 @@ def fixture_image_search(app, request):
                 outputs = base_model.get_layer(params["out"]).output
                 return KerasModel(inputs=inputs, outputs=outputs)
 
-            def preprocess_image_array(self, image_array):
+            @staticmethod
+            def preprocess_image_array(image_array):
                 return params["preprocess"](image_array)
 
     app.config.update({"IMAGE_SEARCH_PATH_PREFIX": params.get("path_prefix", "image_search_vgg16/")})
