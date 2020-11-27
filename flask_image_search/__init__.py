@@ -14,7 +14,7 @@ from sqlalchemy_utils import get_query_entities, get_type
 
 __author__ = """Hanan Fokkens"""
 __email__ = "hananfokkens@gmail.com"
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # get the logger
 logger = logging.getLogger(__name__)
