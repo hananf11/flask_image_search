@@ -43,9 +43,9 @@ def home():
             flash("Failed to get image")
             return redirect("/")
         image = PILImage.open(f)
-        images = Image.query.image_search(image).all()
-        query = Radio.query.image_search("test.jpg", join=Radio.images)
-        radios = query.all()
+        images = Image.query.order_by(image_search.case(image, Image))
+        radios = Radio.query.join(Radio.images).options(db.joinedload(Radio.images)) \
+            .order_by(image_search.case(image, Image)).all()
 
     return render_template_string("""
     {{ get_flashed_messages()[0] }}

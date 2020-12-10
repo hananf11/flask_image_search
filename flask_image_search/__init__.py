@@ -7,10 +7,12 @@ from keras.applications.vgg16 import VGG16, preprocess_input
 from keras.models import Model as KerasModel
 from keras.preprocessing import image as keras_image
 from PIL import Image
-from sqlalchemy import event, literal_column, nullslast
-from sqlalchemy.orm import contains_eager, query_expression, with_expression
-from sqlalchemy.sql.expression import case
-from sqlalchemy_utils import get_query_entities, get_type
+from sqlalchemy import case
+from sqlalchemy import column as sa_column
+from sqlalchemy import event, literal_column
+from sqlalchemy.orm import contains_eager
+from sqlalchemy.orm.attributes import InstrumentedAttribute
+from sqlalchemy_utils import get_class_by_table
 
 __author__ = """Hanan Fokkens"""
 __email__ = "hananfokkens@gmail.com"
@@ -146,9 +148,6 @@ class ImageSearch(object):
             raise Exception("You need to initialize Flask-SQLAlchemy before Flask-Image-Search.")
         self.db = sqlalchemy.db
 
-        # add alias to query_search in db.Query
-        self.db.Query.image_search = lambda self_, *args, **kwargs: self.query_search(*args, **kwargs)(self_)
-
         if tensorflow:
             self.keras_model = self.create_keras_model()
         else:
@@ -174,7 +173,7 @@ class ImageSearch(object):
         :param path: This is the name of the column containing the image path. Defaults to "path".
         :type path: str
         :param ignore: This is the name of the column used to decide if an image should be ignored.
-            defaults to "ignore".
+            defaults to "ignore" if no column is found there is no ignore column.
         :type ignore: str
         """
         def inner(model):
@@ -186,7 +185,7 @@ class ImageSearch(object):
                 features=sdict(file_path),
                 id=id,
                 path=path,
-                ignore=ignore if hasattr(model, ignore) else False,
+                ignore=ignore if ignore and hasattr(model, ignore) else False,
             )
 
             data = self.models[model.__tablename__]
@@ -210,8 +209,6 @@ class ImageSearch(object):
             # load image features for this model
             data["features"].load()
             logger.info(f"Loaded in {len(data['features'])} image indexes for the model {model.__tablename__}")
-
-            model.distance = query_expression()
 
             return model
 
@@ -349,80 +346,30 @@ class ImageSearch(object):
         # return a list of the ids and distances from the search image
         return tuple((ids[id], distances[id]) for id in distances_id_sorted)
 
-    def query_search(self, image, image_model=None, query_model=None, join=False):
-        """This is used to search filter a model using an image.
-        query_search calls `search` and adds the results to the query,
-        by adding a case statement under the column `distance`.
-        This case statement is used in the order added to the query.
+    def case(self, image, model, column=None):
+        """Creates a case statement that contains the distances to the query image matching up to ids.
 
-        :param image: the search image. this can be a path string or a PIL image.
+        :param image: The query image
         :type image: PIL.Image.Image or str
-        :param image_model: The model that has been registered, the one containing the image.
-            If ths is set to None the query will be used to find this value, defaults to None
-        :type image_model: flask_sqlalchemy.Model
-        :param query_model: The model is being queried, this is only used when join is True.
-            When this is set to None the query will be used to find this value.
-        :type query_model: flask_sqlalchemy.Model
-        :param join: Set this to join mode.
-        :type join: bool or flask_sqlalchemy.Model
-        :return: returns a function
-        :rtype: function
+        :param model: The model containing the indexed images.
+        :type model: flask_sqlalchemy.Model
+        :param column: The column that the case statement relates to (Primary key column of the indexed Model)
+        :type column: str or sqlalchemy.schema.Column
         """
-        def inner(query):
-            image_model_ = image_model
-            query_model_ = query_model
+        if column is None:
+            column = getattr(model, self.models[model.__tablename__]["id"])
+        if type(column) is str:
+            column = sa_column(column)
 
-            if join is not True and join is not False:
-                query = query.join(join).options(contains_eager(join))
+        results = self.search(model, image)  # get the ids and distances
 
-            # if the image is none just do nothing to the query.
-            if image is None:
-                return query
+        whens = []
 
-            entities = get_query_entities(query)
+        # construct the whens for the case statement
+        for id, distance in results:
+            whens.append((
+                # literal columns insted of bind parameters
+                (column == literal_column(id.split("_")[0])), literal_column(str(distance))
+            ))
 
-            if query_model_ is None and join:
-                query_model_ = entities[0]  # in join mode query_model_ is the first entity
-
-            # get the flask sqlalchemy model form column descriptions
-            if image_model_ is None:
-                if join:
-                    # in join mode the image_model_ is in a mapper in the second entity
-                    image_model_ = entities[1].class_
-                else:
-                    image_model_ = entities[0]  # in the nomral mode the image_model_ is the first entity
-
-            data = self.models[image_model_.__tablename__]
-
-            expression = image_model_.distance
-
-            results = self.search(image_model_, image)  # get the ids and distances
-
-            # get the id column so it can be used in the case statment
-            id_column = getattr(image_model_, data["id"])
-
-            if join:
-
-                # update the exspression column statment
-                for key, value in query_model_.__mapper__._props.items():
-                    if get_type(value) is image_model_:
-                        expression = f"{key}.distance"
-
-            whens = []
-
-            # construct the whens for the case stament
-            for id, distance in results:
-                whens.append((
-                    # literal columns insted of bind parameters
-                    (id_column == literal_column(id.split("_")[0])),
-                    literal_column(str(distance))
-                ))
-
-            case_statement = case(whens, else_=None).label("distance")
-
-            query = query.options(with_expression(expression, case_statement))
-            query = query.order_by(nullslast("distance"))
-
-            return query
-
-        return inner
+        return case(whens, else_=None)
