@@ -126,32 +126,24 @@ It is possible to manually delete an image from the index::
     image_search.delete(Image)
 
 
-Searching
----------
+Making a query
+--------------
 
-With Flask-Image-Search you can search on registred models and models that have a relationship to a registered model.
+Flask-Image-Search has a :meth:`~ImageSearch.case()` method that returns a :class:`~sqlalchemy.sql.expression.Case` that matches the distance from the image to the correct id,
+this can be used to order a query.
 
-Basic searching
-^^^^^^^^^^^^^^^
+Basic query
+^^^^^^^^^^^
 
-To do a search :meth:`ImageSearch.query_search()`, query_search returns a function that takes a query and returns a :class:`Query <sqlalchemy.orm.query.Query>`.
-query_search is designed to be used with :meth:`Query.with_transformation() <sqlalchemy.orm.query.Query.with_transformation()>` like so::
+Here is an example of a simple query::
 
-    images = Image.query.with_transformation(image_search.query_search('my_image.jpg')).all()
+    case_statement = image_search.case("./image_path/image.png", Image)
+    images = Image.query.order_by(case_statement).all()
 
-The easiest way to do a search is to use the :meth:`Query.image_search` method that is added when :class:`ImageSearch` is initialized,
-this is an alias to :meth:`ImageSearch.query_search()` so it takes all the same parameters::
+Join query
+^^^^^^^^^^
 
-    images = Image.query.image_search('my_image.jpg').all()
-
-
-Join searching
-^^^^^^^^^^^^^^
-
-.. warning::
-    This only works with a one to many relationship where the images are the many.
-
-It is possible to search a Model that does not contain images but is related to one that does and has been indexed, using a join::
+Because the distance is given as a case statement you can construct more advanced queries with joins to your image Model::
 
     class Animals(db.Model):
         id = db.Column(db.Integer, primary_key=True)
@@ -164,12 +156,24 @@ It is possible to search a Model that does not contain images but is related to 
         ...
         animal_id = db.Column(db.Integer, db.ForeignKey("animal.id"))
 
-    animals = Animals.query.join(Animals.images).options(db.contains_eager(Animals.images)) \
-        .image_search('my_image.jpg', join=True).all()
+    case_statement = image_search.case("./image_path/image.png", Image)
+    animals = Animals.query.join(Animals.images).options(db.contains_eager(Animals.images) \
+              .order_by(case_statement)
 
-Short hand::
+Query with distance
+^^^^^^^^^^^^^^^^^^^
 
-    animals = Animals.query.image_search('my_image.jpg', join=Animals.images).all()
+Heres how to get the distance as a mapped attribute on your Model::
+
+    @image_search.register()
+    class Image(db.Model):
+        ...
+
+        distance = db.query_expression()
+
+    case_statement = image_search.case("./image_path/image.png", Image).label("distance")
+    images = Image.query.options(db.with_expression(Image.distance, case_statement)) \
+             .order_by("distance").all()
 
 Advanced
 --------
