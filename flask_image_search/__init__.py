@@ -5,9 +5,6 @@ import h5py
 from types import SimpleNamespace
 
 import numpy as np
-from keras.applications.vgg16 import VGG16, preprocess_input
-from keras.models import Model as KerasModel
-from keras.preprocessing import image as keras_image
 from PIL import Image
 from sqlalchemy import case
 from sqlalchemy import column as sa_column
@@ -24,7 +21,7 @@ handler.setFormatter(logging.Formatter("%(asctime)s flask image search: %(messag
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # set tensorflow debug level to only show errors
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "1"  # set tensorflow debug level to only show errors
 
 
 class ImageSearch(object):
@@ -91,11 +88,13 @@ class ImageSearch(object):
     @staticmethod
     def create_keras_model():
         """This functions exists so that `tensorflow=False` works with a custom model."""
-        base_model = VGG16(weights="imagenet")
-        return KerasModel(inputs=base_model.input, outputs=base_model.get_layer("fc1").output)
+        import keras
+        base_model = keras.applications.vgg16.VGG16(weights="imagenet")
+        return keras.Model(inputs=base_model.input, outputs=base_model.get_layer("fc1").output)
 
     @staticmethod
     def preprocess_image_array(image_array):
+        from keras.applications.vgg16 import preprocess_input
         return preprocess_input(image_array)
 
     def register(self, id="id", path="path", ignore="ignore"):
@@ -162,10 +161,12 @@ class ImageSearch(object):
         :param image: The image to get the features from.
         :type image: PIL.Image.Image
         """
+        from keras.preprocessing.image import img_to_array
+
         if self.keras_model:
             image_size = self.keras_model.inputs[0].shape[1:3]
             image = image.resize(image_size).convert("RGB")  # resize the image and convert to RGB
-            image_array = keras_image.img_to_array(image)  # turn image into np array
+            image_array = img_to_array(image)  # turn image into np array
             image_array = np.expand_dims(image_array, axis=0)  # expand the shape of array
             input_array = self.preprocess_image_array(image_array)
 
@@ -269,7 +270,10 @@ class ImageSearch(object):
 
         search_features = self.feature_extract(image)  # extract the features form the search image.
 
-        ids, features = zip(*self.models[model].features.items())
+        if len(self.models[model].features) > 0:
+            ids, features = zip(*self.models[model].features.items())
+        else:
+            raise Exception("You must index some images before you can search")
 
         # get the distance between all the indexed images and the search image.
         distances = np.linalg.norm(features - search_features, axis=1)

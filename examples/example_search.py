@@ -34,6 +34,8 @@ class Image(db.Model):
         return f"<Image {self.id} {self.radio.name}>"
 
 
+image_search.index_model(Image, threaded=False)
+
 images = Image.query.order_by(image_search.case("./test.jpg", Image)).all()
 
 print(images)
