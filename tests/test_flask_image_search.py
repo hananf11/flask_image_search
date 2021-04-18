@@ -2,6 +2,7 @@
 
 import logging
 import os
+import numpy as np
 
 import pytest
 from flask import Flask
@@ -57,7 +58,7 @@ def fixture_image_search(app, request):
             def preprocess_image_array(image_array):
                 return params["preprocess"](image_array)
 
-    app.config.update({"IMAGE_SEARCH_PATH_PREFIX": params.get("path_prefix", "image_search_vgg16/")})
+    app.config.update({"IMAGE_SEARCH_FILE": params.get("storage", "image_search_vgg16.h5")})
 
     return MyImageSearch(app)
 
@@ -87,14 +88,14 @@ def fixture_Image(db, image_search, Radio):
 
 
 vgg19_test_case = {
-    "path_prefix": "image_search_vgg19/",
+    "storage": "image_search_vgg19.h5",
     "model": vgg19.VGG19,
     "preprocess": vgg19.preprocess_input,
     "out": "fc1"
 }
 
 inception_v3_test_case = {
-    "path_prefix": "image_search_inception_v3/",
+    "storage": "image_search_inception_v3.h5",
     "model": inception_v3.InceptionV3,
     "preprocess": inception_v3.preprocess_input,
     "out": "avg_pool"
@@ -109,20 +110,23 @@ inception_v3_test_case = {
 ], indirect=["image_search"])
 def test_index_image(Image, image_search):
     """Test that indexing images is working correctly"""
-    original_features = image_search.features(Image).copy()  # get a copy of the current features
+    if image_search.storage.get("/image_backup") is not None:
+        del image_search.storage["/image_backup"]
+    image_search.storage.copy("/image_features", "/image_backup")  # get a copy of the current features
 
     # choose a random image to delete from the image index
     image_to_be_deleted = Image.query.order_by(func.random()).first()
     image_search.delete_index(image_to_be_deleted)
 
     # check that the image was removed from the index
-    assert len(original_features) - 1 == len(image_search.features(Image))
+    assert len(image_search.storage["/image_backup"]) - 1 == len(image_search.storage["/image_features"])
 
     image_search.index_model(Image, threaded=False)  # index all missing images
 
     # check the features extracted haven't changed
-    new_features = image_search.features(Image).copy()
-    assert [original_features[key] == new_features[key] for key in new_features]
+    image_features = image_search.storage["/image_features"]
+    image_features_backup = image_search.storage["/image_backup"]
+    assert [image_features_backup[key] == image_features[key] for key in image_features]
 
 
 @pytest.mark.parametrize("image_search, expected", [

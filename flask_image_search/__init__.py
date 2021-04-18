@@ -1,6 +1,8 @@
 import logging
 import os
 import threading
+import h5py
+from types import SimpleNamespace
 
 import numpy as np
 from keras.applications.vgg16 import VGG16, preprocess_input
@@ -10,9 +12,6 @@ from PIL import Image
 from sqlalchemy import case
 from sqlalchemy import column as sa_column
 from sqlalchemy import event, literal_column
-from sqlalchemy.orm import contains_eager
-from sqlalchemy.orm.attributes import InstrumentedAttribute
-from sqlalchemy_utils import get_class_by_table
 
 __author__ = """Hanan Fokkens"""
 __email__ = "hananfokkens@gmail.com"
@@ -26,71 +25,6 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # set tensorflow debug level to only show errors
-
-
-class sdict(dict):
-    """Dictionary that uses numpy save to save itself when it is updated."""
-
-    def __init__(self, file, *args, **kwargs):
-        self.file = file
-        self.save_countdown = None
-        self.call_count = 0  # how many times has this function been called
-        super().__init__(*args, **kwargs)
-
-    def save(self):
-        if self.save_countdown is not None:
-            self.save_countdown.cancel()
-            self.call_count += 1
-
-        def save():
-            self.call_count = 0
-            if not os.path.exists(os.path.dirname(self.file)):
-                os.mkdir(os.path.dirname(self.file))
-            np.savez_compressed(self.file, **self)
-
-        self.save_countdown = threading.Timer(1, save)
-        self.save_countdown.start()
-        if self.call_count >= 100:
-            self.save_countdown.join()
-
-    def load(self):
-        # check the file exists to ovid errors
-        if os.path.exists(self.file):
-            with np.load(self.file) as file:
-                for key in file.files:
-                    # copy accross without triggering save
-                    super().__setitem__(key, file[key])
-
-    def __delitem__(self, name):
-        super().__delitem__(name)
-        self.save()
-
-    def __setitem__(self, name, value):
-        super().__setitem__(name, value)
-        self.save()
-
-    def clear(self):
-        super().clear()
-        self.save()
-
-    def pop(self):
-        result = super().pop()
-        self.save()
-        return result
-
-    def popitem(self):
-        result = super().popitem()
-        self.save()
-        return result
-
-    def setdefault(self, key, default):
-        result = super().setdefault(key, default)
-        self.save()
-        return result
-
-    def update(self, __m, **kwargs):
-        super().update(__m, **kwargs)
-        self.save()
 
 
 class ImageSearch(object):
@@ -136,11 +70,11 @@ class ImageSearch(object):
         :type tensorflow: bool
         :raises Exception: Exception may be raised if Flask-SQLAlchemy is not initialized.
         """
-        app.config.setdefault("IMAGE_SEARCH_PATH_PREFIX", "image_search/")
+        app.config.setdefault("IMAGE_SEARCH_FILE", "image_search.h5")
 
         # get the path_prefix and the app root
-        self.path_prefix = app.config["IMAGE_SEARCH_PATH_PREFIX"]
         self.root = app.root_path
+        self.storage = h5py.File(os.path.join(self.root, app.config["IMAGE_SEARCH_FILE"]), 'a')
 
         # get db from sqlalchemy
         sqlalchemy = app.extensions.get("sqlalchemy")
@@ -177,12 +111,9 @@ class ImageSearch(object):
         :type ignore: str
         """
         def inner(model):
-            # work out the file path
-            file_path = os.path.join(self.root, self.path_prefix + model.__tablename__ + ".npz")
-
             # Store the information about this model in the models dict.
-            self.models[model.__tablename__] = dict(
-                features=sdict(file_path),
+            self.models[model.__tablename__] = SimpleNamespace(
+                features=self.storage.require_group(model.__tablename__ + '_features'),
                 id=id,
                 path=path,
                 ignore=ignore if ignore and hasattr(model, ignore) else False,
@@ -206,9 +137,8 @@ class ImageSearch(object):
                 """An existing model was updated."""
                 self.index(target, True)
 
-            # load image features for this model
-            data["features"].load()
-            logger.info(f"Loaded in {len(data['features'])} image indexes for the model {model.__tablename__}")
+            # log how many images were loaded
+            logger.info(f"Loaded {len(data.features)} image features for '{model.__tablename__}'")
 
             return model
 
@@ -219,12 +149,12 @@ class ImageSearch(object):
 
         :param model: The model that you want to get the features
         :type model: flask_sqlalchemy.Model or str
-        :return: Returns the features of a model.
-        :rtype: dict
+        :return: The group containing the datasets for each image
+        :rtype: h5py.Group
         """
         if type(model) is not str:
             model = model.__tablename__
-        return self.models[model]["features"]
+        return self.storage.require_group(model + '_features')
 
     def feature_extract(self, image):
         """This is a helper function that takes an image processes it and returns the features.
@@ -245,7 +175,7 @@ class ImageSearch(object):
             return np.random.rand(4096)
 
     def index(self, entry, replace=False):
-        """This method indexes an entry of a registered Model.
+        """Indexes an entry of a registered Model.
 
         :param entry: The Model instance to be indexed.
         :type entry: flask_sqlalchemy.Model
@@ -254,22 +184,25 @@ class ImageSearch(object):
         """
         data = self.models[entry.__tablename__]  # get the data for this entry
 
-        if data["ignore"] and getattr(entry, data["ignore"]):
+        if data.ignore and getattr(entry, data.ignore):
             # if this model is ignored return false
             return False
 
-        image_path = getattr(entry, data["path"])  # get the image path
+        image_path = getattr(entry, data.path)  # get the image path
 
-        image_id = str(getattr(entry, data["id"]))
+        image_id = str(getattr(entry, data.id))
 
-        if not replace and image_id in data["features"]:
+        if not replace and image_id in data.features:
             # if the image isn't allowed to be reindexed and it already is indexed skip it
             return True
 
         # open image
         image = Image.open(os.path.join(self.root, image_path))
 
-        data["features"][image_id] = self.feature_extract(image)  # save the features to the features dict
+        features = self.feature_extract(image)
+        # save the features in a dataset named with the image_id
+        data.features.require_dataset(image_id, features.shape, 'float64', data=features,
+                                      compression="gzip", compression_opts=9)
         return True
 
     def index_model(self, model, replace=False, threaded=True):
@@ -310,9 +243,9 @@ class ImageSearch(object):
         data = self.models[entry.__tablename__]  # get the data related to this entry
 
         # get the image id
-        image_id = str(getattr(entry, data["id"]))
+        image_id = str(getattr(entry, data.id))
         try:
-            del data["features"][image_id]
+            del data.features[image_id]
         except KeyError:
             raise KeyError("That Image is not indexed.")
 
@@ -336,7 +269,7 @@ class ImageSearch(object):
 
         search_features = self.feature_extract(image)  # extract the features form the search image.
 
-        ids, features = zip(*self.models[model]["features"].items())
+        ids, features = zip(*self.models[model].features.items())
 
         # get the distance between all the indexed images and the search image.
         distances = np.linalg.norm(features - search_features, axis=1)
@@ -357,7 +290,7 @@ class ImageSearch(object):
         :type column: str or sqlalchemy.schema.Column
         """
         if column is None:
-            column = getattr(model, self.models[model.__tablename__]["id"])
+            column = getattr(model, self.models[model.__tablename__].id)
         if type(column) is str:
             column = sa_column(column)
 
