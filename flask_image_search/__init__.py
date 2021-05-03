@@ -9,6 +9,7 @@ from PIL import Image
 from sqlalchemy import case
 from sqlalchemy import column as sa_column
 from sqlalchemy import event, literal_column
+from mpi4py import MPI
 
 __author__ = """Hanan Fokkens"""
 __email__ = "hananfokkens@gmail.com"
@@ -21,7 +22,7 @@ handler.setFormatter(logging.Formatter("%(asctime)s flask image search: %(messag
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "1"  # set tensorflow debug level to only show errors
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # set tensorflow debug level to only show errors
 
 
 class ImageSearch(object):
@@ -71,7 +72,8 @@ class ImageSearch(object):
 
         # get the path_prefix and the app root
         self.root = app.root_path
-        self.storage = h5py.File(os.path.join(self.root, app.config["IMAGE_SEARCH_FILE"]), 'a')
+        path = os.path.join(self.root, app.config["IMAGE_SEARCH_FILE"])
+        self.storage = h5py.File(path, 'a', driver='mpio', comm=MPI.COMM_WORLD)
 
         # get db from sqlalchemy
         sqlalchemy = app.extensions.get("sqlalchemy")

@@ -15,7 +15,8 @@ requirements = [
     "tensorflow",
     "keras",
     "pillow",
-    "sqlalchemy_utils"
+    "sqlalchemy_utils",
+    "h5pyp"
 ]
 
 setup_requirements = ["pytest-runner", ]
