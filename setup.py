@@ -16,8 +16,8 @@ requirements = [
     "keras",
     "pillow",
     "sqlalchemy_utils",
-    "h5pyp",
-    "mpi4py"
+    "zarr",
+    "lmdb",
 ]
 
 setup_requirements = ["pytest-runner", ]

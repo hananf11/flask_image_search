@@ -2,9 +2,11 @@
 
 import logging
 import os
-import numpy as np
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # noqa
 
 import pytest
+import zarr
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from keras.applications import inception_v3, vgg19
@@ -58,7 +60,7 @@ def fixture_image_search(app, request):
             def preprocess_image_array(image_array):
                 return params["preprocess"](image_array)
 
-    app.config.update({"IMAGE_SEARCH_FILE": params.get("storage", "image_search_vgg16.h5")})
+    app.config.update({"IMAGE_SEARCH_PATH": params.get("storage", "image_search/vgg16")})
 
     return MyImageSearch(app)
 
@@ -88,14 +90,14 @@ def fixture_Image(db, image_search, Radio):
 
 
 vgg19_test_case = {
-    "storage": "image_search_vgg19.h5",
+    "storage": "image_search/vgg19",
     "model": vgg19.VGG19,
     "preprocess": vgg19.preprocess_input,
     "out": "fc1"
 }
 
 inception_v3_test_case = {
-    "storage": "image_search_inception_v3.h5",
+    "storage": "image_search/inception_v3",
     "model": inception_v3.InceptionV3,
     "preprocess": inception_v3.preprocess_input,
     "out": "avg_pool"
@@ -110,9 +112,13 @@ inception_v3_test_case = {
 ], indirect=["image_search"])
 def test_index_image(Image, image_search):
     """Test that indexing images is working correctly"""
-    if image_search.storage.get("/image_backup") is not None:
+    if "/image_backup" in image_search.storage:
         del image_search.storage["/image_backup"]
-    image_search.storage.copy("/image_features", "/image_backup")  # get a copy of the current features
+    zarr.copy_all(
+        image_search.storage["/image_features"],
+        image_search.storage.require_group("/image_backup")
+    )
+    print(type(image_search.features(Image)))
 
     # choose a random image to delete from the image index
     image_to_be_deleted = Image.query.order_by(func.random()).first()

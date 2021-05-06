@@ -1,15 +1,14 @@
 import logging
 import os
 import threading
-import h5py
 from types import SimpleNamespace
 
 import numpy as np
+import zarr
 from PIL import Image
 from sqlalchemy import case
 from sqlalchemy import column as sa_column
 from sqlalchemy import event, literal_column
-from mpi4py import MPI
 
 __author__ = """Hanan Fokkens"""
 __email__ = "hananfokkens@gmail.com"
@@ -52,6 +51,8 @@ class ImageSearch(object):
 
     """
 
+    __slots__ = ['root', 'storage', 'db', 'keras_model', 'models']
+
     def __init__(self, app=None, **kwargs):
         self.app = app
         if app is not None:
@@ -68,12 +69,13 @@ class ImageSearch(object):
         :type tensorflow: bool
         :raises Exception: Exception may be raised if Flask-SQLAlchemy is not initialized.
         """
-        app.config.setdefault("IMAGE_SEARCH_FILE", "image_search.h5")
+        app.config.setdefault("IMAGE_SEARCH_PATH", "image_search")
 
         # get the path_prefix and the app root
         self.root = app.root_path
-        path = os.path.join(self.root, app.config["IMAGE_SEARCH_FILE"])
-        self.storage = h5py.File(path, 'a', driver='mpio', comm=MPI.COMM_WORLD)
+        path = os.path.join(self.root, app.config["IMAGE_SEARCH_PATH"])
+        store = zarr.LMDBStore(path)
+        self.storage = zarr.group(store=store)
 
         # get db from sqlalchemy
         sqlalchemy = app.extensions.get("sqlalchemy")
@@ -151,7 +153,7 @@ class ImageSearch(object):
         :param model: The model that you want to get the features
         :type model: flask_sqlalchemy.Model or str
         :return: The group containing the datasets for each image
-        :rtype: h5py.Group
+        :rtype: zarr.hierarchy.Group
         """
         if type(model) is not str:
             model = model.__tablename__
@@ -204,8 +206,7 @@ class ImageSearch(object):
 
         features = self.feature_extract(image)
         # save the features in a dataset named with the image_id
-        data.features.require_dataset(image_id, features.shape, 'float64', data=features,
-                                      compression="gzip", compression_opts=9)
+        data.features.require_dataset(image_id, features.shape, features.dtype, data=features)
         return True
 
     def index_model(self, model, replace=False, threaded=True):
@@ -312,3 +313,7 @@ class ImageSearch(object):
             ))
 
         return case(whens, else_=None)
+
+    def __del__(self):
+        self.storage.store.flush()
+        self.storage.store.close()

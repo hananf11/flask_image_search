@@ -111,7 +111,7 @@ Pipfile
 Pipfile.lock
 
 # image search data
-*.h5
+*.mdb
 
 # pytest-monitor
 .pymon
