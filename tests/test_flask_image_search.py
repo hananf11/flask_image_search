@@ -3,7 +3,10 @@
 import logging
 import os
 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # noqa
+
 import pytest
+import zarr
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from keras.applications import inception_v3, vgg19
@@ -19,6 +22,7 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 BASE_PATH = os.path.dirname(os.path.realpath(__file__))
+IMAGE = os.path.join(BASE_PATH, "./test.jpg")
 
 
 @pytest.fixture(name="app")
@@ -56,13 +60,13 @@ def fixture_image_search(app, request):
             def preprocess_image_array(image_array):
                 return params["preprocess"](image_array)
 
-    app.config.update({"IMAGE_SEARCH_PATH_PREFIX": params.get("path_prefix", "image_search_vgg16/")})
+    app.config.update({"IMAGE_SEARCH_PATH": params.get("storage", "image_search/vgg16")})
 
     return MyImageSearch(app)
 
 
-@pytest.fixture(name="radio_model")
-def fixture_radio_model(db):
+@pytest.fixture(name="Radio")
+def fixture_Radio(db):
 
     class Radio(db.Model):
         id = db.Column(db.Integer, primary_key=True)
@@ -72,30 +76,28 @@ def fixture_radio_model(db):
     return Radio
 
 
-@pytest.fixture(name="image_model")
-def fixture_image_model(db, image_search, radio_model):
+@pytest.fixture(name="Image")
+def fixture_Image(db, image_search, Radio):
 
     @image_search.register()
     class Image(db.Model):
         id = db.Column(db.Integer, primary_key=True)
         path = db.Column(db.String, nullable=False)
-        radio_id = db.Column(db.Integer, db.ForeignKey(radio_model.id), nullable=False)
+        radio_id = db.Column(db.Integer, db.ForeignKey(Radio.id), nullable=False)
 
     image_search.index_model(Image, threaded=False)
     return Image
 
 
-# @pytest.mark.parametrize("image_search", [{}, {"path_prefix": "image_search_2/"}], indirect=True)
-
 vgg19_test_case = {
-    "path_prefix": "image_search_vgg19/",
+    "storage": "image_search/vgg19",
     "model": vgg19.VGG19,
     "preprocess": vgg19.preprocess_input,
     "out": "fc1"
 }
 
 inception_v3_test_case = {
-    "path_prefix": "image_search_inception_v3/",
+    "storage": "image_search/inception_v3",
     "model": inception_v3.InceptionV3,
     "preprocess": inception_v3.preprocess_input,
     "out": "avg_pool"
@@ -108,22 +110,29 @@ inception_v3_test_case = {
     vgg19_test_case,
     inception_v3_test_case,
 ], indirect=["image_search"])
-def test_index_image(image_model, image_search):
+def test_index_image(Image, image_search):
     """Test that indexing images is working correctly"""
-    original_features = image_search.features(image_model).copy()  # get a copy of the current features
+    if "/image_backup" in image_search.storage:
+        del image_search.storage["/image_backup"]
+    zarr.copy_all(
+        image_search.storage["/image_features"],
+        image_search.storage.require_group("/image_backup")
+    )
+    print(type(image_search.features(Image)))
 
     # choose a random image to delete from the image index
-    image_to_be_deleted = image_model.query.order_by(func.random()).first()
+    image_to_be_deleted = Image.query.order_by(func.random()).first()
     image_search.delete_index(image_to_be_deleted)
 
     # check that the image was removed from the index
-    assert len(original_features) - 1 == len(image_search.features(image_model))
+    assert len(image_search.storage["/image_backup"]) - 1 == len(image_search.storage["/image_features"])
 
-    image_search.index_model(image_model, threaded=False)  # index all missing images
+    image_search.index_model(Image, threaded=False)  # index all missing images
 
     # check the features extracted haven't changed
-    new_features = image_search.features(image_model).copy()
-    assert [original_features[key] == new_features[key] for key in new_features]
+    image_features = image_search.storage["/image_features"]
+    image_features_backup = image_search.storage["/image_backup"]
+    assert [image_features_backup[key] == image_features[key] for key in image_features]
 
 
 @pytest.mark.parametrize("image_search, expected", [
@@ -131,8 +140,8 @@ def test_index_image(image_model, image_search):
     (vgg19_test_case, ["2649", "4512", "4514", "2197", "4516"]),
     (inception_v3_test_case, ["4512", "4516", "4514", "5171", "2649"]),
 ], indirect=["image_search"])
-def test_search(image_model, image_search, expected):
-    results = image_search.search(image_model, os.path.join(BASE_PATH, "./test.jpg"))
+def test_search(Image, image_search, expected):
+    results = image_search.search(Image, IMAGE)
     # check that the results are correct by checking the ids
     assert [result[0] for result in results[:5]] == expected
 
@@ -142,18 +151,11 @@ def test_search(image_model, image_search, expected):
     (vgg19_test_case, [2649, 4512, 4514, 2197, 4516]),
     (inception_v3_test_case, [4512, 4516, 4514, 5171, 2649]),
 ], indirect=["image_search"])
-def test_query_search(image_model, expected):
-    images = image_model.query.image_search(os.path.join(BASE_PATH, "./test.jpg")).all()
+def test_query_search(Image, image_search, expected):
+    # images = Image.query.image_search().all()
+    images = Image.query.order_by(image_search.case(IMAGE, Image)).limit(5)
     # check that the correct Images were returned
-    assert [image.id for image in images[:5]] == expected
-
-
-def test_transform_query_search(image_model, image_search):
-    images = image_model.query.with_transformation(
-        image_search.query_search(os.path.join(BASE_PATH, "./test.jpg"))
-    ).all()
-    # check that the correct Images were returned
-    assert [image.id for image in images[:5]] == [4512, 2649, 4514, 4516, 2194]
+    assert [image.id for image in images] == expected
 
 
 @pytest.mark.parametrize("image_search, expected_radios, expected_images_1, expected_images_2, expected_images_3", [
@@ -179,14 +181,13 @@ def test_transform_query_search(image_model, image_search):
         [5171, 5172, 5170, 5173, 5178, 5180, 5177, 5179, 5175, 5176, 5174, 5181]
     ),
 ], indirect=["image_search"])
-def test_query_search_join(db, image_model, radio_model, expected_radios, expected_images_1, expected_images_2,
-                           expected_images_3):
-    query = radio_model.query.join(image_model).options(db.contains_eager(radio_model.images))
-    query = query.image_search(os.path.join(BASE_PATH, "./test.jpg"), join=True)
+def test_query_join_search(db, image_search, Image, Radio, expected_radios,
+                           expected_images_1, expected_images_2, expected_images_3):
+    query = Radio.query
+    query = query.join(Image).options(db.contains_eager(Radio.images))  # join to images
+    query = query.order_by(image_search.case(IMAGE, Image))
     radios = query.all()[:3]
-    for radio in radios:
-        for image in radio.images:
-            assert image.radio_id == radio.id
+
     assert [model.id for model in radios] == expected_radios
     assert [image.id for image in radios[0].images] == expected_images_1
     assert [image.id for image in radios[1].images] == expected_images_2

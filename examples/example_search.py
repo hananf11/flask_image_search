@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 
 from flask_image_search import ImageSearch
 
+
 app = Flask(__name__)
 app.config.update({
     "SQLALCHEMY_DATABASE_URI": f"sqlite:///{app.root_path}/test.db",
@@ -17,7 +18,7 @@ class Radio(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String, nullable=False)
 
-    images = db.relationship("Image", backref="radio")
+    images = db.relationship("Image", backref="radio", primaryjoin="Radio.id == Image.radio_id")
 
     def __repr__(self):
         return f"<Radio {self.id} {self.name}>"
@@ -33,18 +34,13 @@ class Image(db.Model):
         return f"<Image {self.id} {self.radio.name}>"
 
 
-image_search.index_model(Image, threaded=False)  # index the model so it can be searched
+image_search.index_model(Image, threaded=False)
 
-# search with an image using query_search
-images = Image.query.with_transformation(image_search.query_search("test.jpg")).all()
+images = Image.query.order_by(image_search.case("./test.jpg", Image)).all()
+
 print(images)
 
-# search using query.image_search
-images = Image.query.image_search("test.jpg").all()
-print(images)
+radios = Radio.query.join(Radio.images).options(db.joinedload(Radio.images)).order_by(
+    image_search.case("./test.jpg", Image)).all()
 
-# join search using query.image_search
-
-query = Radio.query.image_search("test.jpg", join=Radio.images)
-radios = query.all()
 print(radios)

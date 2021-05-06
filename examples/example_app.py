@@ -29,6 +29,8 @@ class Image(db.Model):
     path = db.Column(db.String, nullable=False)
     radio_id = db.Column(db.Integer, db.ForeignKey("radio.id"), nullable=False)
 
+    distance = db.query_expression()
+
 
 image_search.index_model(Image)
 
@@ -43,9 +45,12 @@ def home():
             flash("Failed to get image")
             return redirect("/")
         image = PILImage.open(f)
-        images = Image.query.image_search(image).all()
-        query = Radio.query.image_search("test.jpg", join=Radio.images)
-        radios = query.all()
+        case = image_search.case(image, Image).label('d')
+        images = Image.query.options(db.with_expression(Image.distance, case)).order_by('d')
+
+        radios = Radio.query.join(Radio.images).options(
+            db.contains_eager(Radio.images).with_expression(Image.distance, case)
+        ).order_by('d')
 
     return render_template_string("""
     {{ get_flashed_messages()[0] }}

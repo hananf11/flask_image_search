@@ -1,20 +1,18 @@
 import logging
 import os
 import threading
+from types import SimpleNamespace
 
 import numpy as np
-from keras.applications.vgg16 import VGG16, preprocess_input
-from keras.models import Model as KerasModel
-from keras.preprocessing import image as keras_image
+import zarr
 from PIL import Image
-from sqlalchemy import event, literal_column, nullslast
-from sqlalchemy.orm import contains_eager, query_expression, with_expression
-from sqlalchemy.sql.expression import case
-from sqlalchemy_utils import get_query_entities, get_type
+from sqlalchemy import case
+from sqlalchemy import column as sa_column
+from sqlalchemy import event, literal_column
 
 __author__ = """Hanan Fokkens"""
 __email__ = "hananfokkens@gmail.com"
-__version__ = "0.5.0"
+__version__ = "1.0.0"
 
 # get the logger
 logger = logging.getLogger(__name__)
@@ -24,71 +22,6 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # set tensorflow debug level to only show errors
-
-
-class sdict(dict):
-    """Dictionary that uses numpy save to save itself when it is updated."""
-
-    def __init__(self, file, *args, **kwargs):
-        self.file = file
-        self.save_countdown = None
-        self.call_count = 0  # how many times has this function been called
-        super().__init__(*args, **kwargs)
-
-    def save(self):
-        if self.save_countdown is not None:
-            self.save_countdown.cancel()
-            self.call_count += 1
-
-        def save():
-            self.call_count = 0
-            if not os.path.exists(os.path.dirname(self.file)):
-                os.mkdir(os.path.dirname(self.file))
-            np.savez_compressed(self.file, **self)
-
-        self.save_countdown = threading.Timer(1, save)
-        self.save_countdown.start()
-        if self.call_count >= 100:
-            self.save_countdown.join()
-
-    def load(self):
-        # check the file exists to ovid errors
-        if os.path.exists(self.file):
-            with np.load(self.file) as file:
-                for key in file.files:
-                    # copy accross without triggering save
-                    super().__setitem__(key, file[key])
-
-    def __delitem__(self, name):
-        super().__delitem__(name)
-        self.save()
-
-    def __setitem__(self, name, value):
-        super().__setitem__(name, value)
-        self.save()
-
-    def clear(self):
-        super().clear()
-        self.save()
-
-    def pop(self):
-        result = super().pop()
-        self.save()
-        return result
-
-    def popitem(self):
-        result = super().popitem()
-        self.save()
-        return result
-
-    def setdefault(self, key, default):
-        result = super().setdefault(key, default)
-        self.save()
-        return result
-
-    def update(self, __m, **kwargs):
-        super().update(__m, **kwargs)
-        self.save()
 
 
 class ImageSearch(object):
@@ -118,6 +51,8 @@ class ImageSearch(object):
 
     """
 
+    __slots__ = ['root', 'storage', 'db', 'keras_model', 'models']
+
     def __init__(self, app=None, **kwargs):
         self.app = app
         if app is not None:
@@ -134,20 +69,19 @@ class ImageSearch(object):
         :type tensorflow: bool
         :raises Exception: Exception may be raised if Flask-SQLAlchemy is not initialized.
         """
-        app.config.setdefault("IMAGE_SEARCH_PATH_PREFIX", "image_search/")
+        app.config.setdefault("IMAGE_SEARCH_PATH", "image_search")
 
         # get the path_prefix and the app root
-        self.path_prefix = app.config["IMAGE_SEARCH_PATH_PREFIX"]
         self.root = app.root_path
+        path = os.path.join(self.root, app.config["IMAGE_SEARCH_PATH"])
+        store = zarr.LMDBStore(path)
+        self.storage = zarr.group(store=store)
 
         # get db from sqlalchemy
         sqlalchemy = app.extensions.get("sqlalchemy")
         if sqlalchemy is None:
             raise Exception("You need to initialize Flask-SQLAlchemy before Flask-Image-Search.")
         self.db = sqlalchemy.db
-
-        # add alias to query_search in db.Query
-        self.db.Query.image_search = lambda self_, *args, **kwargs: self.query_search(*args, **kwargs)(self_)
 
         if tensorflow:
             self.keras_model = self.create_keras_model()
@@ -158,11 +92,13 @@ class ImageSearch(object):
     @staticmethod
     def create_keras_model():
         """This functions exists so that `tensorflow=False` works with a custom model."""
-        base_model = VGG16(weights="imagenet")
-        return KerasModel(inputs=base_model.input, outputs=base_model.get_layer("fc1").output)
+        import keras
+        base_model = keras.applications.vgg16.VGG16(weights="imagenet")
+        return keras.Model(inputs=base_model.input, outputs=base_model.get_layer("fc1").output)
 
     @staticmethod
     def preprocess_image_array(image_array):
+        from keras.applications.vgg16 import preprocess_input
         return preprocess_input(image_array)
 
     def register(self, id="id", path="path", ignore="ignore"):
@@ -174,19 +110,16 @@ class ImageSearch(object):
         :param path: This is the name of the column containing the image path. Defaults to "path".
         :type path: str
         :param ignore: This is the name of the column used to decide if an image should be ignored.
-            defaults to "ignore".
+            defaults to "ignore" if no column is found there is no ignore column.
         :type ignore: str
         """
         def inner(model):
-            # work out the file path
-            file_path = os.path.join(self.root, self.path_prefix + model.__tablename__ + ".npz")
-
             # Store the information about this model in the models dict.
-            self.models[model.__tablename__] = dict(
-                features=sdict(file_path),
+            self.models[model.__tablename__] = SimpleNamespace(
+                features=self.storage.require_group(model.__tablename__ + '_features'),
                 id=id,
                 path=path,
-                ignore=ignore if hasattr(model, ignore) else False,
+                ignore=ignore if ignore and hasattr(model, ignore) else False,
             )
 
             data = self.models[model.__tablename__]
@@ -207,11 +140,8 @@ class ImageSearch(object):
                 """An existing model was updated."""
                 self.index(target, True)
 
-            # load image features for this model
-            data["features"].load()
-            logger.info(f"Loaded in {len(data['features'])} image indexes for the model {model.__tablename__}")
-
-            model.distance = query_expression()
+            # log how many images were loaded
+            logger.info(f"Loaded {len(data.features)} image features for '{model.__tablename__}'")
 
             return model
 
@@ -222,12 +152,12 @@ class ImageSearch(object):
 
         :param model: The model that you want to get the features
         :type model: flask_sqlalchemy.Model or str
-        :return: Returns the features of a model.
-        :rtype: dict
+        :return: The group containing the datasets for each image
+        :rtype: zarr.hierarchy.Group
         """
         if type(model) is not str:
             model = model.__tablename__
-        return self.models[model]["features"]
+        return self.storage.require_group(model + '_features')
 
     def feature_extract(self, image):
         """This is a helper function that takes an image processes it and returns the features.
@@ -235,10 +165,12 @@ class ImageSearch(object):
         :param image: The image to get the features from.
         :type image: PIL.Image.Image
         """
+        from keras.preprocessing.image import img_to_array
+
         if self.keras_model:
             image_size = self.keras_model.inputs[0].shape[1:3]
             image = image.resize(image_size).convert("RGB")  # resize the image and convert to RGB
-            image_array = keras_image.img_to_array(image)  # turn image into np array
+            image_array = img_to_array(image)  # turn image into np array
             image_array = np.expand_dims(image_array, axis=0)  # expand the shape of array
             input_array = self.preprocess_image_array(image_array)
 
@@ -248,7 +180,7 @@ class ImageSearch(object):
             return np.random.rand(4096)
 
     def index(self, entry, replace=False):
-        """This method indexes an entry of a registered Model.
+        """Indexes an entry of a registered Model.
 
         :param entry: The Model instance to be indexed.
         :type entry: flask_sqlalchemy.Model
@@ -257,22 +189,24 @@ class ImageSearch(object):
         """
         data = self.models[entry.__tablename__]  # get the data for this entry
 
-        if data["ignore"] and getattr(entry, data["ignore"]):
+        if data.ignore and getattr(entry, data.ignore):
             # if this model is ignored return false
             return False
 
-        image_path = getattr(entry, data["path"])  # get the image path
+        image_path = getattr(entry, data.path)  # get the image path
 
-        image_id = str(getattr(entry, data["id"]))
+        image_id = str(getattr(entry, data.id))
 
-        if not replace and image_id in data["features"]:
+        if not replace and image_id in data.features:
             # if the image isn't allowed to be reindexed and it already is indexed skip it
             return True
 
         # open image
         image = Image.open(os.path.join(self.root, image_path))
 
-        data["features"][image_id] = self.feature_extract(image)  # save the features to the features dict
+        features = self.feature_extract(image)
+        # save the features in a dataset named with the image_id
+        data.features.require_dataset(image_id, features.shape, features.dtype, data=features)
         return True
 
     def index_model(self, model, replace=False, threaded=True):
@@ -313,9 +247,9 @@ class ImageSearch(object):
         data = self.models[entry.__tablename__]  # get the data related to this entry
 
         # get the image id
-        image_id = str(getattr(entry, data["id"]))
+        image_id = str(getattr(entry, data.id))
         try:
-            del data["features"][image_id]
+            del data.features[image_id]
         except KeyError:
             raise KeyError("That Image is not indexed.")
 
@@ -339,7 +273,10 @@ class ImageSearch(object):
 
         search_features = self.feature_extract(image)  # extract the features form the search image.
 
-        ids, features = zip(*self.models[model]["features"].items())
+        if len(self.models[model].features) > 0:
+            ids, features = zip(*self.models[model].features.items())
+        else:
+            raise Exception("You must index some images before you can search")
 
         # get the distance between all the indexed images and the search image.
         distances = np.linalg.norm(features - search_features, axis=1)
@@ -349,80 +286,34 @@ class ImageSearch(object):
         # return a list of the ids and distances from the search image
         return tuple((ids[id], distances[id]) for id in distances_id_sorted)
 
-    def query_search(self, image, image_model=None, query_model=None, join=False):
-        """This is used to search filter a model using an image.
-        query_search calls `search` and adds the results to the query,
-        by adding a case statement under the column `distance`.
-        This case statement is used in the order added to the query.
+    def case(self, image, model, column=None):
+        """Creates a case statement that contains the distances to the query image matching up to ids.
 
-        :param image: the search image. this can be a path string or a PIL image.
+        :param image: The query image
         :type image: PIL.Image.Image or str
-        :param image_model: The model that has been registered, the one containing the image.
-            If ths is set to None the query will be used to find this value, defaults to None
-        :type image_model: flask_sqlalchemy.Model
-        :param query_model: The model is being queried, this is only used when join is True.
-            When this is set to None the query will be used to find this value.
-        :type query_model: flask_sqlalchemy.Model
-        :param join: Set this to join mode.
-        :type join: bool or flask_sqlalchemy.Model
-        :return: returns a function
-        :rtype: function
+        :param model: The model containing the indexed images.
+        :type model: flask_sqlalchemy.Model
+        :param column: The column that the case statement relates to (Primary key column of the indexed Model)
+        :type column: str or sqlalchemy.schema.Column
         """
-        def inner(query):
-            image_model_ = image_model
-            query_model_ = query_model
+        if column is None:
+            column = getattr(model, self.models[model.__tablename__].id)
+        if type(column) is str:
+            column = sa_column(column)
 
-            if join is not True and join is not False:
-                query = query.join(join).options(contains_eager(join))
+        results = self.search(model, image)  # get the ids and distances
 
-            # if the image is none just do nothing to the query.
-            if image is None:
-                return query
+        whens = []
 
-            entities = get_query_entities(query)
+        # construct the whens for the case statement
+        for id, distance in results:
+            whens.append((
+                # literal columns insted of bind parameters
+                (column == literal_column(id.split("_")[0])), literal_column(str(distance))
+            ))
 
-            if query_model_ is None and join:
-                query_model_ = entities[0]  # in join mode query_model_ is the first entity
+        return case(whens, else_=None)
 
-            # get the flask sqlalchemy model form column descriptions
-            if image_model_ is None:
-                if join:
-                    # in join mode the image_model_ is in a mapper in the second entity
-                    image_model_ = entities[1].class_
-                else:
-                    image_model_ = entities[0]  # in the nomral mode the image_model_ is the first entity
-
-            data = self.models[image_model_.__tablename__]
-
-            expression = image_model_.distance
-
-            results = self.search(image_model_, image)  # get the ids and distances
-
-            # get the id column so it can be used in the case statment
-            id_column = getattr(image_model_, data["id"])
-
-            if join:
-
-                # update the exspression column statment
-                for key, value in query_model_.__mapper__._props.items():
-                    if get_type(value) is image_model_:
-                        expression = f"{key}.distance"
-
-            whens = []
-
-            # construct the whens for the case stament
-            for id, distance in results:
-                whens.append((
-                    # literal columns insted of bind parameters
-                    (id_column == literal_column(id.split("_")[0])),
-                    literal_column(str(distance))
-                ))
-
-            case_statement = case(whens, else_=None).label("distance")
-
-            query = query.options(with_expression(expression, case_statement))
-            query = query.order_by(nullslast("distance"))
-
-            return query
-
-        return inner
+    def __del__(self):
+        self.storage.store.flush()
+        self.storage.store.close()
