@@ -51,6 +51,6 @@ setup(
     test_suite="tests",
     tests_require=test_requirements,
     url="https://github.com/hananf11/flask_image_search",
-    version="0.5.0",
+    version="1.0.0",
     zip_safe=False
 )
