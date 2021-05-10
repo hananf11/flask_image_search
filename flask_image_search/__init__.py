@@ -51,7 +51,7 @@ class ImageSearch(object):
 
     """
 
-    __slots__ = ['root', 'storage', 'db', 'keras_model', 'models']
+    __slots__ = ['root', 'storage', 'db', 'keras_model', 'models', 'app']
 
     def __init__(self, app=None, **kwargs):
         self.app = app
@@ -74,8 +74,7 @@ class ImageSearch(object):
         # get the path_prefix and the app root
         self.root = app.root_path
         path = os.path.join(self.root, app.config["IMAGE_SEARCH_PATH"])
-        store = zarr.LMDBStore(path)
-        self.storage = zarr.group(store=store)
+        self.storage = zarr.open(path, mode='a')
 
         # get db from sqlalchemy
         sqlalchemy = app.extensions.get("sqlalchemy")
@@ -313,7 +312,3 @@ class ImageSearch(object):
             ))
 
         return case(whens, else_=None)
-
-    def __del__(self):
-        self.storage.store.flush()
-        self.storage.store.close()
