@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 from types import SimpleNamespace
+from flask_image_search.__about__ import __author__, __author_email__, __version__, __license__
 
 import numpy as np
 import zarr
@@ -9,10 +10,6 @@ from PIL import Image
 from sqlalchemy import case
 from sqlalchemy import column as sa_column
 from sqlalchemy import event, literal_column
-
-__author__ = """Hanan Fokkens"""
-__email__ = "hananfokkens@gmail.com"
-__version__ = "1.0.0"
 
 # get the logger
 logger = logging.getLogger(__name__)
@@ -22,6 +19,14 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # set tensorflow debug level to only show errors
+
+__all__ = (
+    'ImageSearch',
+    __version__,
+    __author__,
+    __author_email__,
+    __license__
+)
 
 
 class ImageSearch(object):
@@ -91,13 +96,13 @@ class ImageSearch(object):
     @staticmethod
     def create_keras_model():
         """This functions exists so that `tensorflow=False` works with a custom model."""
-        import keras
+        from tensorflow import keras
         base_model = keras.applications.vgg16.VGG16(weights="imagenet")
         return keras.Model(inputs=base_model.input, outputs=base_model.get_layer("fc1").output)
 
     @staticmethod
     def preprocess_image_array(image_array):
-        from keras.applications.vgg16 import preprocess_input
+        from tensorflow.keras.applications.vgg16 import preprocess_input
         return preprocess_input(image_array)
 
     def register(self, id="id", path="path", ignore="ignore"):
