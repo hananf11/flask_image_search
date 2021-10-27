@@ -6,8 +6,9 @@ Flask Image Search
 .. image:: https://img.shields.io/pypi/v/flask_image_search.svg
         :target: https://pypi.python.org/pypi/flask_image_search
 
-.. image:: https://img.shields.io/travis/com/hananf11/flask_image_search.svg
-        :target: https://travis-ci.com/hananf11/flask_image_search
+.. image:: https://github.com/hananf11/flask_image_search/actions/workflows/action-ci-cd.yml/badge.svg
+        :target: https://github.com/hananf11/flask_image_search/actions/workflows/action-ci-cd.yml
+        :alt: CI/CD Build status
 
 .. image:: https://readthedocs.org/projects/flask-image-search/badge/?version=latest
         :target: https://flask-image-search.readthedocs.io/en/latest/?badge=latest
