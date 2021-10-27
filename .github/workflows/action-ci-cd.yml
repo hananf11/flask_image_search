@@ -63,7 +63,7 @@ jobs:
         python setup.py sdist bdist_wheel
     - name: Publish
       run: |
-        twine upload dist/* --repository testpypi -u ${{ secrets.PYPI_USERNAME }} -p ${{ secrets.PYPI_PASSWORD }}
+        twine upload dist/* -u ${{ secrets.PYPI_USERNAME }} -p ${{ secrets.PYPI_PASSWORD }}
     - name: Release
       uses: softprops/action-gh-release@v1
       with:
