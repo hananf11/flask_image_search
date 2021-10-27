@@ -1,1 +1,2 @@
 pallets_sphinx_themes==1.2.3
+sphinx==4.2.0
