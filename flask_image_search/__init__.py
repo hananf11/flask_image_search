@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import threading
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ import zarr
 from PIL import Image
 from sqlalchemy import case
 from sqlalchemy import column as sa_column
+from sqlalchemy.orm import lazyload
 from sqlalchemy import event, literal_column
 
 # get the logger
@@ -96,13 +98,13 @@ class ImageSearch(object):
     @staticmethod
     def create_keras_model():
         """This functions exists so that `tensorflow=False` works with a custom model."""
-        from tensorflow import keras
+        import keras
         base_model = keras.applications.vgg16.VGG16(weights="imagenet")
         return keras.Model(inputs=base_model.input, outputs=base_model.get_layer("fc1").output)
 
     @staticmethod
     def preprocess_image_array(image_array):
-        from tensorflow.keras.applications.vgg16 import preprocess_input
+        from keras.applications.vgg16 import preprocess_input
         return preprocess_input(image_array)
 
     def register(self, id="id", path="path", ignore="ignore"):
@@ -118,9 +120,19 @@ class ImageSearch(object):
         :type ignore: str
         """
         def inner(model):
+            from keras import backend
+            size = backend.int_shape(self.keras_model.outputs[0])[1]
+            # backend.int_shape(self.keras_model.outputs[0])[1:3]
+            if model.__tablename__ + '_features' not in self.storage:
+                self.storage.create_dataset(
+                    model.__tablename__ + '_features',
+                    shape=(5000, size),
+                    chunks=(5000, size),
+                    dtype=np.float32
+                )
             # Store the information about this model in the models dict.
             self.models[model.__tablename__] = SimpleNamespace(
-                features=self.storage.require_group(model.__tablename__ + '_features'),
+                features=self.storage[model.__tablename__ + '_features'],
                 id=id,
                 path=path,
                 ignore=ignore if ignore and hasattr(model, ignore) else False,
@@ -145,7 +157,8 @@ class ImageSearch(object):
                 self.index(target, True)
 
             # log how many images were loaded
-            logger.info(f"Loaded {len(data.features)} image features for '{model.__tablename__}'")
+            logger.info(
+                f"Loaded {int(np.sum(np.any(data.features[:] != 0, axis=1)))} image features for '{model.__tablename__}'")
 
             return model
 
@@ -161,7 +174,7 @@ class ImageSearch(object):
         """
         if type(model) is not str:
             model = model.__tablename__
-        return self.storage.require_group(model + '_features')
+        return self.storage.require_dataset(model + '_features')
 
     def feature_extract(self, image):
         """This is a helper function that takes an image processes it and returns the features.
@@ -170,9 +183,10 @@ class ImageSearch(object):
         :type image: PIL.Image.Image
         """
         from keras.preprocessing.image import img_to_array
+        from keras import backend
 
         if self.keras_model:
-            image_size = self.keras_model.inputs[0].shape[1:3]
+            image_size = backend.int_shape(self.keras_model.inputs[0])[1:3]
             image = image.resize(image_size).convert("RGB")  # resize the image and convert to RGB
             image_array = img_to_array(image)  # turn image into np array
             image_array = np.expand_dims(image_array, axis=0)  # expand the shape of array
@@ -198,10 +212,12 @@ class ImageSearch(object):
             return False
 
         image_path = getattr(entry, data.path)  # get the image path
+        image_id = getattr(entry, data.id)
 
-        image_id = str(getattr(entry, data.id))
+        if image_id >= data.features.shape[0] - 1:
+            data.features.resize((int(math.ceil(image_id / 1000) * 1000), data.features.shape[1]))
 
-        if not replace and image_id in data.features:
+        if not replace and (data.features[image_id] != 0).any():
             # if the image isn't allowed to be reindexed and it already is indexed skip it
             return True
 
@@ -210,7 +226,7 @@ class ImageSearch(object):
 
         features = self.feature_extract(image)
         # save the features in a dataset named with the image_id
-        data.features.require_dataset(image_id, features.shape, features.dtype, data=features)
+        data.features[image_id] = features
         return True
 
     def index_model(self, model, replace=False, threaded=True):
@@ -224,7 +240,7 @@ class ImageSearch(object):
         :type threaded: bool
         """
         def thread_content():
-            entries = self.db.session.query(model).all()
+            entries = self.db.session.query(model).options(lazyload('*')).all()
 
             total = 0
             indexed = 0
@@ -251,13 +267,13 @@ class ImageSearch(object):
         data = self.models[entry.__tablename__]  # get the data related to this entry
 
         # get the image id
-        image_id = str(getattr(entry, data.id))
+        image_id = getattr(entry, data.id)
         try:
-            del data.features[image_id]
+            data.features[image_id] = np.zeros(data.features[image_id].shape)
         except KeyError:
             raise KeyError("That Image is not indexed.")
 
-    def search(self, model, image):
+    def search(self, model, image, sorted=True, limit=None):
         """This searches the indexed data with an image and returns a tuple of id strings.
 
         :param model: This is the model to be search.
@@ -265,6 +281,10 @@ class ImageSearch(object):
         :type model: str or flask_sqlalchemy.Model
         :param image: The search image
         :type image: PIL.Image.Image or str
+        :param sorted: Should the results be sorted
+        :type sorted: bool
+        :param limit: Limit the number of results
+        :type limit: None or int
         :return: This returns a tuple of tuples containing the id and the distance from the search image.
         :rtype: tuple[tuple[str, int]]
         """
@@ -277,20 +297,24 @@ class ImageSearch(object):
 
         search_features = self.feature_extract(image)  # extract the features form the search image.
 
-        if len(self.models[model].features) > 0:
-            ids, features = zip(*self.models[model].features.items())
-        else:
-            raise Exception("You must index some images before you can search")
-
+        # genorate zero for the feature size
+        zeros = np.zeros((1, search_features.shape[0]))
         # get the distance between all the indexed images and the search image.
-        distances = np.linalg.norm(features - search_features, axis=1)
-        # argsort [1, 3, 2] --> [0, 2, 1]
-        distances_id_sorted = np.argsort(distances)  # get the order to apply to sort the images
+        # concatonate between the zeros and the features so that the first value is an un-indexed reference
+        distances = np.linalg.norm(np.concatenate([zeros, self.models[model].features]) - search_features, axis=1)
+        if sorted:
+            distances_id_sorted = np.argsort(distances)
+        else:
+            distances_id_sorted = range(len(distances))
 
         # return a list of the ids and distances from the search image
-        return tuple((ids[id], distances[id]) for id in distances_id_sorted)
+        # reduce the id by one to account for the zeros
+        results = tuple((id - 1, distances[id]) for id in distances_id_sorted if distances[id] != distances[0])
+        if limit is not None:
+            results = results[:limit]
+        return results
 
-    def case(self, image, model, column=None):
+    def case(self, image, model, column=None, limit=None):
         """Creates a case statement that contains the distances to the query image matching up to ids.
 
         :param image: The query image
@@ -305,15 +329,20 @@ class ImageSearch(object):
         if type(column) is str:
             column = sa_column(column)
 
-        results = self.search(model, image)  # get the ids and distances
+        results = self.search(model, image, sorted=limit is not None, limit=limit)  # get the ids and distances
 
         whens = []
 
         # construct the whens for the case statement
         for id, distance in results:
+            if limit and len(whens) >= limit:
+                break
             whens.append((
                 # literal columns insted of bind parameters
-                (column == literal_column(id.split("_")[0])), literal_column(str(distance))
+                (column == literal_column(str(id))), literal_column(str(distance))
             ))
 
-        return case(whens, else_=None)
+        if whens:
+            return case(whens, else_=literal_column('9999'))
+        else:
+            return None

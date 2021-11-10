@@ -2,6 +2,7 @@
 
 import logging
 import os
+import numpy as np
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # noqa
 
@@ -28,32 +29,41 @@ IMAGE = os.path.join(BASE_PATH, "./test.jpg")
 )
 def test_index_image(Image, image_search, tmp_path):
     """Test that indexing images is working correctly"""
-    tmp_storage = zarr.open(str(tmp_path / 'tmp.zarr'), mode='a')
-    zarr.copy_all(
-        image_search.storage["/image_features"],
-        tmp_storage
-    )
+    tmp_storage = zarr.open(str(tmp_path / 'tmp.zarr'), mode='a',
+                            shape=image_search.storage['/image_features'].shape,
+                            chunks=image_search.storage['/image_features'].chunks,
+                            dtype=np.float32)
+
+    tmp_storage[:] = image_search.storage["/image_features"][:]
 
     # choose a random image to delete from the image index
     image_to_be_deleted = Image.query.order_by(func.random()).first()
     image_search.delete_index(image_to_be_deleted)
 
-    # check that the image was removed from the index
-    assert len(tmp_storage) - 1 == len(image_search.storage["/image_features"])
+    assert np.sum(
+        np.any(
+            tmp_storage[:] != 0,
+            axis=1
+        )
+    ) - 1 == np.sum(
+        np.any(
+            image_search.storage['/image_features'][:] != 0,
+            axis=1
+        )
+    )
 
     image_search.index_model(Image, threaded=False)  # index all missing images
 
     # check the features extracted haven't changed
-    image_features = image_search.storage["/image_features"]
-    assert [tmp_storage[key] == image_features[key] for key in image_features]
+    assert (tmp_storage[:] == image_search.storage["/image_features"][:]).all()
 
 
 @pytest.mark.parametrize(
     "image_search, expected",
     [
-        ("vgg16", ["4512", "2649", "4514", "4516", "2194"]),
-        ("vgg19", ["2649", "4512", "4514", "2197", "4516"]),
-        ("inception_v3", ["4512", "4516", "4514", "5171", "2649"]),
+        ("vgg16", [4512, 2649, 4514, 4516, 2194]),
+        ("vgg19", [2649, 4512, 4514, 2197, 4516]),
+        ("inception_v3", [4512, 4516, 4514, 5171, 2649]),
     ],
     ids=["vgg16", "vgg19", "inception_v3"],
     indirect=["image_search"],
@@ -61,9 +71,9 @@ def test_index_image(Image, image_search, tmp_path):
 
 )
 def test_search(Image, image_search, expected):
-    results = image_search.search(Image, IMAGE)
+    results = image_search.search(Image, IMAGE, limit=5)
     # check that the results are correct by checking the ids
-    assert [result[0] for result in results[:5]] == expected
+    assert [result[0] for result in results] == expected
 
 
 @pytest.mark.parametrize(
@@ -78,7 +88,7 @@ def test_search(Image, image_search, expected):
 )
 def test_query_search(Image, image_search, expected):
     # images = Image.query.image_search().all()
-    images = Image.query.order_by(image_search.case(IMAGE, Image)).limit(5)
+    images = Image.query.order_by(image_search.case(IMAGE, Image, limit=5)).limit(5)
     # check that the correct Images were returned
     assert [image.id for image in images] == expected
 
