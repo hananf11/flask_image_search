@@ -120,9 +120,7 @@ class ImageSearch(object):
         :type ignore: str
         """
         def inner(model):
-            from keras import backend
-            size = backend.int_shape(self.keras_model.outputs[0])[1]
-            # backend.int_shape(self.keras_model.outputs[0])[1:3]
+            size = self.keras_model.output_shape[-1]
             if model.__tablename__ + '_features' not in self.storage:
                 self.storage.create_dataset(
                     model.__tablename__ + '_features',
@@ -183,10 +181,9 @@ class ImageSearch(object):
         :type image: PIL.Image.Image
         """
         from keras.preprocessing.image import img_to_array
-        from keras import backend
 
         if self.keras_model:
-            image_size = backend.int_shape(self.keras_model.inputs[0])[1:3]
+            image_size = self.keras_model.input_shape[1:3]
             image = image.resize(image_size).convert("RGB")  # resize the image and convert to RGB
             image_array = img_to_array(image)  # turn image into np array
             image_array = np.expand_dims(image_array, axis=0)  # expand the shape of array
