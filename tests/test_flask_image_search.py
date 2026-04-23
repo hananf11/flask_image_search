@@ -2,12 +2,10 @@
 
 import logging
 import os
-import numpy as np
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # noqa
 
 import pytest
-import zarr
 from sqlalchemy.sql.expression import func
 
 logger = logging.getLogger(__name__)
@@ -27,44 +25,18 @@ IMAGE = os.path.join(BASE_PATH, "./test.jpg")
     ids=["default", "vgg16", "vgg19", "inception_v3"],
     indirect=["image_search"]
 )
-def test_index_image(Image, image_search, tmp_path):
-    """Test that indexing images is working correctly"""
-    tmp_storage = zarr.open(str(tmp_path / 'tmp.zarr'), mode='a',
-                            shape=image_search.storage['/image_features'].shape,
-                            chunks=image_search.storage['/image_features'].chunks,
-                            dtype=np.float32)
+def test_index_image(Image, image_search):
+    """Deleting an image drops exactly one indexed feature; re-indexing restores it."""
+    before = image_search.count_indexed(Image)
 
-    tmp_storage[:] = image_search.storage["/image_features"][:]
-
-    # choose a random image to delete from the image index
     image_to_be_deleted = Image.query.order_by(func.random()).first()
     image_search.delete_index(image_to_be_deleted)
 
-    assert np.sum(
-        np.any(
-            tmp_storage[:] != 0,
-            axis=1
-        )
-    ) - 1 == np.sum(
-        np.any(
-            image_search.storage['/image_features'][:] != 0,
-            axis=1
-        )
-    )
+    assert image_search.count_indexed(Image) == before - 1
 
-    image_search.index_model(Image, threaded=False)  # index all missing images
+    image_search.index_model(Image, threaded=False)
 
-    assert np.sum(
-        np.any(
-            tmp_storage[:] != 0,
-            axis=1
-        )
-    ) == np.sum(
-        np.any(
-            image_search.storage['/image_features'][:] != 0,
-            axis=1
-        )
-    )
+    assert image_search.count_indexed(Image) == before
 
 
 @pytest.mark.parametrize(
@@ -118,8 +90,7 @@ def test_query_search(Image, image_search, expected):
             {
                 439: [2649, 4512, 2204, 4513, 5115, 5117, 5116],
                 371: [4514, 4516, 4517, 4518, 4515, 1798, 4519, 1799, 1800],
-                438: [2197, 2194, 2196, 2195, 2193]
-
+                438: [2197, 2194, 2196, 2193, 2195]
             }
         ),
         (

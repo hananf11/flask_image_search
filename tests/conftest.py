@@ -1,8 +1,10 @@
 import logging
 import os
+import shutil
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # noqa
 
+import numpy as np
 import pytest
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
@@ -28,10 +30,17 @@ def app():
 
 
 @pytest.fixture(ids=["test.db"])
-def db(app):
-    """Fixture for sqlalchemy"""
+def db(app, tmp_path):
+    """Fixture for sqlalchemy.
+
+    Copies the committed test.db to a tmp path so tests can write vector
+    tables without dirtying the tracked fixture file.
+    """
+    src = os.path.join(BASE_PATH, "test.db")
+    dst = tmp_path / "test.db"
+    shutil.copy(src, str(dst))
     app.config.update({
-        "SQLALCHEMY_DATABASE_URI": "sqlite:///test.db",
+        "SQLALCHEMY_DATABASE_URI": f"sqlite:///{dst}",
         "SQLALCHEMY_TRACK_MODIFICATIONS": False
     })
     db = SQLAlchemy(app)
@@ -123,6 +132,30 @@ def Radio(db):
     return Radio
 
 
+def _load_fixture_vectors(image_search, Image):
+    """Load pre-computed vectors from fixtures/{namespace}.npz into the vector table.
+
+    Falls back to live inference (slow) if the fixture file is missing so that
+    tests still work before generate_fixtures.py has been run.
+    """
+    fixture_path = os.path.join(BASE_PATH, "fixtures", f"{image_search.namespace}.npz")
+    if not os.path.exists(fixture_path):
+        import warnings
+        warnings.warn(
+            f"Fixture file {fixture_path} not found; falling back to live inference. "
+            "Run `python tests/generate_fixtures.py` to pre-compute vectors.",
+            stacklevel=2,
+        )
+        image_search.index_model(Image, threaded=False)
+        return
+
+    data = np.load(fixture_path)
+    conn = image_search.db.session.connection()
+    for pk, embedding in zip(data["pks"].tolist(), data["embeddings"]):
+        image_search.backend.upsert(conn, Image, int(pk), embedding)
+    image_search.db.session.flush()
+
+
 @pytest.fixture
 def Image(db, image_search, Radio):
     """Image db.Model for the deafult database."""
@@ -133,5 +166,5 @@ def Image(db, image_search, Radio):
         path = db.Column(db.String, nullable=False)
         radio_id = db.Column(db.Integer, db.ForeignKey(Radio.id), nullable=False)
 
-    image_search.index_model(Image, threaded=False)
+    _load_fixture_vectors(image_search, Image)
     return Image
