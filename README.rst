@@ -42,6 +42,57 @@ the CNN is used to extract the features from the images in a dataset. The featur
 When an image is searched it's features are extracted and compared with all the other images to get the distance from the search image,
 the distances are then used to sort the images.
 
+Vector Storage Backends
+-----------------------
+
+Flask-Image-Search automatically picks the best available backend for your database.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 25 55
+
+   * - Backend
+     - Selected when
+     - Notes
+   * - ``GenericBackend``
+     - Always (fallback)
+     - Works on every database Flask-SQLAlchemy supports. Loads all vectors
+       into a NumPy matrix in RAM on first query; brute-force L2 scan is
+       O(N). Fast up to ~50 K images; memory grows linearly (10 K VGG16
+       vectors ≈ 160 MB RAM).
+   * - ``SqliteVecBackend``
+     - SQLite + ``sqlite-vec`` installed + extension loading supported
+     - Vectors stay in SQLite; KNN queries use sqlite-vec's ANN index (≈
+       O(log N)). No corpus loaded into Python memory. Falls back to
+       ``GenericBackend`` automatically if the extension cannot be loaded.
+   * - ``PgVectorBackend``
+     - PostgreSQL + ``pgvector`` installed
+     - Native ``vector`` column type; ``<->`` L2 operator benefits from
+       HNSW / IVFFlat indexes. Correlated-subquery ordering integrates
+       cleanly with arbitrary SQLAlchemy queries.
+
+**Checking SQLite extension support**
+
+``SqliteVecBackend`` requires Python's ``sqlite3`` to be compiled with
+``SQLITE_ENABLE_LOAD_EXTENSION``. Ubuntu, Debian, and macOS Python builds
+include this; Fedora / RHEL builds typically do not. Check with::
+
+    python3 -c "import sqlite3; c=sqlite3.connect(':memory:'); print(hasattr(c,'enable_load_extension'))"
+
+If this prints ``False``, install ``pysqlite3-binary`` and configure
+SQLAlchemy to use it, or use ``GenericBackend`` (the automatic fallback).
+
+**Installing optional backends**::
+
+    pip install flask-image-search[sqlite]    # SqliteVecBackend
+    pip install flask-image-search[postgres]  # PgVectorBackend
+
+**Choosing a backend explicitly**::
+
+    from flask_image_search import ImageSearch, SqliteVecBackend
+
+    image_search = ImageSearch(app, backend=SqliteVecBackend())
+
 Credits
 -------
 
