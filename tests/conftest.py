@@ -86,6 +86,9 @@ class ImageSearchVGG19(ImageSearch):
     def get_feature_size(self):
         return 4096
 
+    def get_preprocess(self):
+        return torchvision.models.VGG19_Weights.DEFAULT.transforms()
+
 
 class ImageSearchInceptionV3(ImageSearch):
     def get_model(self):
@@ -95,8 +98,8 @@ class ImageSearchInceptionV3(ImageSearch):
     def get_feature_size(self):
         return 2048
 
-    def get_input_size(self):
-        return (299, 299)
+    def get_preprocess(self):
+        return torchvision.models.Inception_V3_Weights.DEFAULT.transforms()
 
 
 # ------------------------------------------------------------------ #

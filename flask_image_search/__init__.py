@@ -12,6 +12,7 @@ from sqlalchemy import (
     LargeBinary,
     Table,
     event,
+    func,
     literal_column,
     select,
     text,
@@ -76,6 +77,15 @@ class VectorBackend:
 
     def count_indexed(self, model):
         raise NotImplementedError
+
+    def is_indexed(self, connection, model, pk):
+        """Return True if pk already has a vector stored.
+
+        Used by ImageSearch to skip re-indexing when replace=False. Backends
+        that use INSERT OR REPLACE semantics can keep the default (False) and
+        always let upsert run.
+        """
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -222,15 +232,17 @@ class GenericBackend(VectorBackend):
         return sa_case(*whens, else_=literal_column("9999"))
 
     def count_indexed(self, model):
-        return self._load(model).matrix.shape[0]
+        self._ensure_created(model.__tablename__)
+        store = self._stores[model.__tablename__]
+        conn = store.image_search.db.session.connection()
+        return conn.execute(select(func.count()).select_from(store.table)).scalar() or 0
 
-    def _is_indexed(self, connection, model, pk):
+    def is_indexed(self, connection, model, pk):
         store = self._stores[model.__tablename__]
         self._ensure_created(model.__tablename__)
-        row = connection.execute(
+        return connection.execute(
             select(store.table.c.pk).where(store.table.c.pk == pk)
-        ).first()
-        return row is not None
+        ).first() is not None
 
 
 def _sql_literal(value):
@@ -587,7 +599,8 @@ class ImageSearch(object):
         image_search = ImageSearch(app)
     """
 
-    __slots__ = ["root", "db", "model", "device", "feature_size", "models", "app", "backend", "_namespace"]
+    __slots__ = ["root", "db", "model", "device", "feature_size", "models", "app", "backend", "_namespace",
+                 "preprocess"]
 
     def __init__(self, app=None, **kwargs):
         self.app = app
@@ -607,6 +620,7 @@ class ImageSearch(object):
         self.device = None
         self.model = self.get_model() if load_model else None
         self.feature_size = self.get_feature_size() if self.model is not None else 4096
+        self.preprocess = self.get_preprocess() if self.model is not None else None
         self.models = {}
         self._namespace = (
             namespace
@@ -663,32 +677,29 @@ class ImageSearch(object):
         with torch.no_grad():
             return self.model(test_input).shape[1]
 
-    def get_input_size(self):
-        """Return the ``(width, height)`` to resize images to before extraction.
+    def get_preprocess(self):
+        """Return the preprocessing transform for images before the forward pass.
 
-        Override when using a backbone that expects a different input resolution
-        (e.g. InceptionV3 requires 299×299).
+        Defaults to the transform recommended by the weights used in ``get_model()``.
+        Override when using a custom backbone with different input requirements.
+        Must accept a PIL image and return a float tensor of shape ``(C, H, W)``.
         """
-        return (224, 224)
+        import torchvision.models as M
+
+        return M.VGG16_Weights.DEFAULT.transforms()
 
     def feature_extract(self, image):
         """Extract an L2-normalised feature vector from a PIL image.
 
-        Override to use a different backbone or preprocessing pipeline.
+        Override to use a fully custom extraction pipeline.
         Must return a 1-D float32 numpy array of length ``self.feature_size``.
         """
         import torch
-        import torchvision.transforms as T
 
         if self.model is None:
             return np.random.rand(self.feature_size)
 
-        image = image.convert("RGB").resize(self.get_input_size())
-        transform = T.Compose([
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
-        tensor = transform(image).unsqueeze(0).to(self.device)
+        tensor = self.preprocess(image.convert("RGB")).unsqueeze(0).to(self.device)
         with torch.no_grad():
             feature = self.model(tensor)[0].cpu().numpy()
         return feature / np.linalg.norm(feature)
@@ -736,9 +747,8 @@ class ImageSearch(object):
         pk = getattr(entry, data.id)
         model = type(entry)
 
-        if not replace and isinstance(self.backend, GenericBackend):
-            if self.backend._is_indexed(connection, model, pk):
-                return True
+        if not replace and self.backend.is_indexed(connection, model, pk):
+            return True
 
         image_path = getattr(entry, data.path)
         image = Image.open(os.path.join(self.root, image_path))
