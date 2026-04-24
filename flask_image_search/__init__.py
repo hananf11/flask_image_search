@@ -390,7 +390,7 @@ class SqliteVecBackend(VectorBackend):
         self._ensure_created(model.__tablename__)
         store = self._stores[model.__tablename__]
         conn = store.image_search.db.session.connection()
-        row = conn.execute(f"SELECT COUNT(*) FROM {store.vec_tablename}").fetchone()
+        row = conn.execute(text(f"SELECT COUNT(*) FROM {store.vec_tablename}")).fetchone()
         return row[0]
 
 
@@ -450,8 +450,8 @@ class PgVectorBackend(VectorBackend):
         except Exception:
             return
         with engine.connect() as conn:
-            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            conn.execute("COMMIT")
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
         store.table.create(bind=engine, checkfirst=True)
         store.created = True
 
