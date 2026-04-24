@@ -108,7 +108,7 @@ push so broken code can't reach the remote.
 **Common commands**::
 
     pytest                            # run tests
-    ruff check flask_image_search tests  # lint
+    ruff check                           # lint
 
 **Cutting a release**::
 

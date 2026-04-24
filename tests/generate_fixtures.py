@@ -16,11 +16,10 @@ import numpy as np
 import torch
 import torchvision
 from flask import Flask
+from flask_image_search import ImageSearch
 from flask_sqlalchemy import SQLAlchemy
 from PIL import Image as PILImage
 from torch import nn
-
-from flask_image_search import ImageSearch
 
 BASE_PATH = os.path.dirname(os.path.realpath(__file__))
 FIXTURES_PATH = os.path.join(BASE_PATH, "fixtures")

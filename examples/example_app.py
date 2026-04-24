@@ -1,6 +1,6 @@
-from flask import Flask, render_template_string, request, redirect, flash
-from flask_sqlalchemy import SQLAlchemy
+from flask import Flask, flash, redirect, render_template_string, request
 from flask_image_search import ImageSearch
+from flask_sqlalchemy import SQLAlchemy
 from PIL import Image as PILImage
 
 app = Flask(__name__)

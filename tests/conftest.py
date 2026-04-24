@@ -7,10 +7,9 @@ import pytest
 import torch
 import torchvision
 from flask import Flask
+from flask_image_search import ImageSearch
 from flask_sqlalchemy import SQLAlchemy
 from torch import nn
-
-from flask_image_search import ImageSearch
 
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler()

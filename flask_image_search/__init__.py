@@ -11,12 +11,16 @@ from sqlalchemy import (
     Column,
     LargeBinary,
     Table,
-    case as sa_case,
-    column as sa_column,
     event,
     literal_column,
     select,
     text,
+)
+from sqlalchemy import (
+    case as sa_case,
+)
+from sqlalchemy import (
+    column as sa_column,
 )
 from sqlalchemy.orm import lazyload
 
@@ -261,6 +265,7 @@ class SqliteVecBackend(VectorBackend):
     def available():
         """Return True if sqlite-vec can be loaded on this Python build."""
         import sqlite3
+
         import sqlite_vec
         con = sqlite3.connect(":memory:")
         if not hasattr(con, "enable_load_extension"):
@@ -470,8 +475,6 @@ class PgVectorBackend(VectorBackend):
         connection.execute(table.delete().where(table.c.pk == pk))
 
     def search(self, model, query_vector, sorted=True, limit=None):
-        from sqlalchemy import func
-
         self._ensure_created(model.__tablename__)
         store = self._stores[model.__tablename__]
         vec = np.asarray(query_vector, dtype=np.float32).tolist()
