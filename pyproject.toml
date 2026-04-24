@@ -51,6 +51,7 @@ dev = [
     "twine",
     "pallets_sphinx_themes",
     "bump-my-version",
+    "pre-commit",
 ]
 
 [tool.setuptools.dynamic]

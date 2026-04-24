@@ -93,6 +93,30 @@ SQLAlchemy to use it, or use ``GenericBackend`` (the automatic fallback).
 
     image_search = ImageSearch(app, backend=SqliteVecBackend())
 
+Development
+-----------
+
+**Setup**::
+
+    pip install -e ".[dev]"
+    pre-commit install --hook-type pre-commit --hook-type pre-push
+
+This installs the package in editable mode with all dev tools, and wires up
+two git hooks: ruff runs on every commit, the full pytest suite runs on every
+push so broken code can't reach the remote.
+
+**Common commands**::
+
+    pytest                            # run tests
+    ruff check flask_image_search tests  # lint
+
+**Cutting a release**::
+
+    # 1. Add a HISTORY.rst entry describing the changes
+    # 2. Bump the version (updates __about__.py, commits, and tags automatically)
+    bump-my-version bump patch        # or: minor / major
+    git push --tags                   # CI builds, publishes to PyPI, creates GitHub release
+
 Credits
 -------
 
