@@ -169,10 +169,9 @@ def _load_fixture_vectors(image_search, Image):
         return
 
     data = np.load(fixture_path)
-    conn = image_search.db.session.connection()
-    for pk, embedding in zip(data["pks"].tolist(), data["embeddings"]):
-        image_search.backend.upsert(conn, Image, int(pk), embedding)
-    image_search.db.session.flush()
+    with image_search.db.engine.begin() as conn:
+        for pk, embedding in zip(data["pks"].tolist(), data["embeddings"]):
+            image_search.backend.upsert(conn, Image, int(pk), embedding)
 
 
 @pytest.fixture
