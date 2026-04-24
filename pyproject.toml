@@ -1,12 +1,12 @@
 [build-system]
 requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "Flask-Image-Search"
 dynamic = ["version"]
 description = "Image Searching For Flask and Flask-SQLAlchemy."
-readme = {file = ["README.rst", "HISTORY.rst"], content-type = "text/x-rst"}
+readme = {file = "README.rst", content-type = "text/x-rst"}
 license = {text = "MIT"}
 authors = [{name = "Hanan Fokkens", email = "hananfokkens@gmail.com"}]
 requires-python = ">=3.8"
