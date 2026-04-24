@@ -33,7 +33,6 @@ handler.setFormatter(logging.Formatter("%(asctime)s flask image search: %(messag
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 __all__ = (
     "ImageSearch",
@@ -554,29 +553,19 @@ def _auto_backend(dialect_name):
 _NAMESPACE_SAFE = re.compile(r"[^A-Za-z0-9_]+")
 
 
-def _derive_namespace(keras_model):
-    """Derive a stable, table-name-safe namespace from the given Keras model.
+def _derive_namespace(model, dim=None):
+    """Derive a stable, table-name-safe namespace from a torch.nn.Module.
 
-    Any change to architecture, output shape, or cut-layer flows through to a
-    different namespace, so switching feature extractors never silently reuses
-    stale vectors written by a prior extractor.
+    Any change to architecture or output dimension flows through to a different
+    namespace, so switching backbones never silently reuses stale vectors.
+    ``str(model)`` produces a stable layer-dump that changes with architecture.
     """
-    if keras_model is None:
+    if model is None:
         return "default"
 
-    name = getattr(keras_model, "name", None) or "model"
-    try:
-        dim = keras_model.output_shape[-1]
-    except Exception:
-        dim = "x"
-
-    try:
-        config_repr = repr(keras_model.get_config())
-    except Exception:
-        config_repr = repr(keras_model)
-    short = hashlib.sha1(config_repr.encode("utf-8")).hexdigest()[:8]
-
-    raw = f"{name}_{dim}_{short}"
+    name = model.__class__.__name__.lower()
+    short = hashlib.sha1(str(model).encode("utf-8")).hexdigest()[:8]
+    raw = f"{name}_{dim or 'x'}_{short}"
     return _NAMESPACE_SAFE.sub("_", raw).strip("_") or "default"
 
 
@@ -595,14 +584,14 @@ class ImageSearch(object):
         image_search = ImageSearch(app)
     """
 
-    __slots__ = ["root", "db", "keras_model", "models", "app", "backend", "_namespace"]
+    __slots__ = ["root", "db", "model", "device", "feature_size", "models", "app", "backend", "_namespace"]
 
     def __init__(self, app=None, **kwargs):
         self.app = app
         if app is not None:
             self.init_app(app, **kwargs)
 
-    def init_app(self, app, tensorflow=True, backend=None, namespace=None):
+    def init_app(self, app, load_model=True, backend=None, namespace=None):
         self.root = app.root_path
 
         sqlalchemy = app.extensions.get("sqlalchemy")
@@ -612,12 +601,14 @@ class ImageSearch(object):
             )
         self.db = getattr(sqlalchemy, "db", sqlalchemy)
 
-        self.keras_model = self.create_keras_model() if tensorflow else None
+        self.device = None
+        self.model = self.get_model() if load_model else None
+        self.feature_size = self.get_feature_size() if self.model is not None else 4096
         self.models = {}
         self._namespace = (
             namespace
             or app.config.get("IMAGE_SEARCH_NAMESPACE")
-            or _derive_namespace(self.keras_model)
+            or _derive_namespace(self.model, self.feature_size)
         )
 
         if backend is None:
@@ -628,46 +619,80 @@ class ImageSearch(object):
     def namespace(self):
         """Identifier used to scope the vector store to this feature extractor.
 
-        Auto-derived from the Keras model (``<name>_<dim>_<config-hash>``) so
+        Auto-derived from the model's architecture and output dimension so
         swapping backbones can never cross-contaminate vector tables. Override
         by passing ``namespace=`` to :meth:`init_app` / ``__init__`` or by
         setting ``IMAGE_SEARCH_NAMESPACE`` in Flask config.
         """
         return self._namespace
 
-    @staticmethod
-    def create_keras_model():
-        import keras
-        base_model = keras.applications.vgg16.VGG16(weights="imagenet")
-        return keras.Model(
-            inputs=base_model.input, outputs=base_model.get_layer("fc1").output
-        )
+    def get_model(self):
+        """Load and return the feature extraction model.
 
-    @staticmethod
-    def preprocess_image_array(image_array):
-        from keras.applications.vgg16 import preprocess_input
-        return preprocess_input(image_array)
+        Override in a subclass to use a different backbone. Also responsible
+        for setting ``self.device`` and switching the model to inference mode.
+
+        Default: torchvision VGG16 with ImageNet weights, classifier
+        truncated to the first FC layer (4096-d output).
+        """
+        import torch
+        import torchvision
+
+        # Prevents thread explosion on shared hosting (e.g. PythonAnywhere).
+        torch.set_num_threads(1)
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        backbone = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.DEFAULT)
+        backbone.classifier = backbone.classifier[:1]
+        for param in backbone.parameters():
+            param.grad = None
+        backbone.to(self.device)
+        backbone.train(False)  # inference mode — equivalent to .eval()
+        return backbone
+
+    def get_feature_size(self):
+        """Return the dimensionality of the feature vectors produced by ``self.model``.
+
+        Override if the probing forward-pass is too slow or unavailable.
+        """
+        import torch
+        test_input = torch.randn(1, 3, 224, 224).to(self.device)
+        with torch.no_grad():
+            return self.model(test_input).shape[1]
+
+    def get_input_size(self):
+        """Return the ``(width, height)`` to resize images to before extraction.
+
+        Override when using a backbone that expects a different input resolution
+        (e.g. InceptionV3 requires 299×299).
+        """
+        return (224, 224)
 
     def feature_extract(self, image):
-        from keras.preprocessing.image import img_to_array
+        """Extract an L2-normalised feature vector from a PIL image.
 
-        if self.keras_model:
-            image_size = self.keras_model.input_shape[1:3]
-            image = image.resize(image_size).convert("RGB")
-            image_array = img_to_array(image)
-            image_array = np.expand_dims(image_array, axis=0)
-            input_array = self.preprocess_image_array(image_array)
+        Override to use a different backbone or preprocessing pipeline.
+        Must return a 1-D float32 numpy array of length ``self.feature_size``.
+        """
+        import torch
+        import torchvision.transforms as T
 
-            feature = self.keras_model.predict(input_array)[0]
-            return feature / np.linalg.norm(feature)
-        return np.random.rand(4096)
+        if self.model is None:
+            return np.random.rand(self.feature_size)
+
+        image = image.convert("RGB").resize(self.get_input_size())
+        transform = T.Compose([
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+        tensor = transform(image).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            feature = self.model(tensor)[0].cpu().numpy()
+        return feature / np.linalg.norm(feature)
 
     def register(self, id="id", path="path", ignore="ignore"):
         def inner(model):
-            if self.keras_model is not None:
-                dim = self.keras_model.output_shape[-1]
-            else:
-                dim = 4096
+            dim = self.feature_size
 
             self.models[model.__tablename__] = SimpleNamespace(
                 id=id,
