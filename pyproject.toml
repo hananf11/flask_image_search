@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68", "setuptools_scm"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "Flask-Image-Search"
+dynamic = ["version"]
+description = "Image Searching For Flask and Flask-SQLAlchemy."
+readme = {file = ["README.rst", "HISTORY.rst"], content-type = "text/x-rst"}
+license = {text = "MIT"}
+authors = [{name = "Hanan Fokkens", email = "hananfokkens@gmail.com"}]
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "flask>=2.0",
+    "Flask-SQLAlchemy>=2.5",
+    "SQLAlchemy>=1.4",
+    "pillow>=8.2",
+    "numpy>=1.21",
+    "torch>=1.9",
+    "torchvision>=0.10",
+]
+
+[project.urls]
+Documentation = "https://flask-image-search.readthedocs.io"
+"Source Code" = "https://github.com/hananf11/flask_image_search"
+"Issue Tracker" = "https://github.com/hananf11/flask_image_search/issues"
+
+[project.optional-dependencies]
+sqlite = ["sqlite-vec"]
+postgres = ["pgvector"]
+docs = ["pallets_sphinx_themes"]
+dev = [
+    "pytest",
+    "coverage",
+    "ruff",
+    "sphinx",
+    "twine",
+    "pallets_sphinx_themes",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "flask_image_search.__about__.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["flask_image_search*"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "double"
