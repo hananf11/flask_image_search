@@ -625,14 +625,6 @@ class ImageSearch(object):
             backend = _auto_backend(self.db.engine.dialect.name)
         self.backend = backend
 
-        # SQLite's default rollback journal serialises readers and writers,
-        # deadlocking any background indexing thread. WAL lets readers run
-        # concurrently with a single writer, which is what the library needs.
-        if self.db.engine.dialect.name == "sqlite":
-            @event.listens_for(self.db.engine, "connect")
-            def _sqlite_pragmas(dbapi_conn, _):
-                dbapi_conn.execute("PRAGMA journal_mode=WAL")
-
     @property
     def namespace(self):
         """Identifier used to scope the vector store to this feature extractor.
@@ -767,17 +759,36 @@ class ImageSearch(object):
         with self.db.engine.begin() as conn:
             return self._on_upsert(conn, entry, replace=replace)
 
+    # Commit every N entries during index_model. Small enough to keep the SQLite
+    # write lock window brief (letting readers interleave), large enough to
+    # amortise transaction overhead over many inserts.
+    _INDEX_BATCH_SIZE = 50
+
     def index_model(self, model, replace=False, threaded=True):
         def run():
             with self.app.app_context():
                 entries = self.db.session.query(model).options(lazyload("*")).all()
                 total = 0
                 indexed = 0
-                with self.db.engine.begin() as conn:
-                    for entry in entries:
-                        total += 1
-                        if self._on_upsert(conn, entry, replace=replace):
-                            indexed += 1
+                batch = []
+
+                def flush():
+                    nonlocal indexed
+                    if not batch:
+                        return
+                    with self.db.engine.begin() as conn:
+                        for entry in batch:
+                            if self._on_upsert(conn, entry, replace=replace):
+                                indexed += 1
+                    batch.clear()
+
+                for entry in entries:
+                    total += 1
+                    batch.append(entry)
+                    if len(batch) >= self._INDEX_BATCH_SIZE:
+                        flush()
+                flush()
+
                 logger.info(
                     f"Indexed {indexed} of {total} images for the model {model.__tablename__}"
                 )
