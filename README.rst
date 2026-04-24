@@ -93,6 +93,25 @@ SQLAlchemy to use it, or use ``GenericBackend`` (the automatic fallback).
 
     image_search = ImageSearch(app, backend=SqliteVecBackend())
 
+Migrating from 1.x
+------------------
+
+Version 2.0 replaces TensorFlow/Keras with PyTorch. Existing indexed vectors
+are **not compatible** and must be regenerated.
+
+Quick checklist:
+
+* ``pip install flask-image-search==2.0.0`` (drops ``tensorflow`` / ``Keras`` deps)
+* Rename ``create_keras_model()`` → ``get_model()`` in any subclass
+* Remove ``preprocess_image_array()`` overrides (fold into ``feature_extract`` if needed)
+* Rename ``self.keras_model`` → ``self.model``
+* Rename ``init_app(tensorflow=False)`` → ``init_app(load_model=False)``
+* Re-index all images: ``image_search.index_model(YourImageModel)``
+
+See `HISTORY.rst`_ for the full changelog.
+
+.. _HISTORY.rst: https://github.com/hananf11/flask_image_search/blob/main/HISTORY.rst
+
 Development
 -----------
 

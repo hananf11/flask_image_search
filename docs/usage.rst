@@ -208,28 +208,46 @@ To choose a backend explicitly instead of relying on auto-selection::
 Advanced
 --------
 
-Changing Keras Model
-^^^^^^^^^^^^^^^^^^^^
+Changing the backbone model
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-By default `flask_image_search` uses the `VGG16`_ for it's feature extraction.
-You can change the keras model used for feature extraction by overriding some of the :class:`ImageSearch` class methods.
-Here is an example using `InceptionV3`_::
+By default Flask-Image-Search uses `torchvision VGG16`_ for feature extraction
+(4096-d output, ImageNet weights). Override :meth:`~ImageSearch.get_model`,
+:meth:`~ImageSearch.get_feature_size`, and optionally
+:meth:`~ImageSearch.get_input_size` to swap to any ``torch.nn.Module``::
 
+    import torchvision
+    from torch import nn
     from flask_image_search import ImageSearch
-    from keras.applications.inception_v3 import InceptionV3, preprocess_input
-    from keras.models import Model as KerasModel
 
 
-    class MyImageSearch(ImageSearch):
-        @staticmethod
-        def create_keras_model():
-            base_model = InceptionV3(weights="imagenet")
-            return KerasModel(inputs=base_model.input, outputs=base_model.get_layer("avg_pool").output)
+    class InceptionSearch(ImageSearch):
+        def get_model(self):
+            import torch
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            m = torchvision.models.inception_v3(weights=torchvision.models.Inception_V3_Weights.DEFAULT)
+            m.fc = nn.Identity()   # 2048-d output from the final pooling layer
+            m.aux_logits = False
+            m.to(self.device)
+            m.train(False)
+            return m
 
-        @staticmethod
-        def preprocess_image_array(image_array):
-            return preprocess_input(image_array)
+        def get_feature_size(self):
+            return 2048
 
+        def get_input_size(self):
+            return (299, 299)
 
-.. _VGG16: https://keras.io/api/applications/vgg/#vgg16-function
-.. _InceptionV3: https://keras.io/api/applications/inceptionv3/
+The default ``feature_extract`` implementation resizes the image to
+``get_input_size()``, applies standard ImageNet normalisation, runs a forward
+pass, and L2-normalises the output. For most backbones this requires no
+further overrides.
+
+.. note::
+    Switching backbones invalidates existing indexed vectors. The namespace
+    is derived from the model architecture, so Flask-Image-Search will
+    automatically create a fresh vector table — but you must re-index::
+
+        image_search.index_model(Image)
+
+.. _torchvision VGG16: https://pytorch.org/vision/stable/models/generated/torchvision.models.vgg16.html
