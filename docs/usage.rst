@@ -34,13 +34,13 @@ Alternatively you if you're using a `factory`_::
 .. _factory: https://flask.palletsprojects.com/en/1.1.x/patterns/appfactories/#basic-factories
 
 .. note::
-    flask_image_search loads keras/tensorflow when it is initialized,
-    this can become a real pain when debugging your flask app,
-    to stop tensorflow from loading and annoying you::
+    Flask-Image-Search loads the PyTorch model on initialization, which can
+    slow down the Flask dev-server restart loop. Disable model loading with::
 
-        image_search = ImageSearch(app, tensorflow=False)
+        image_search = ImageSearch(app, load_model=False)
 
-    when tensorflow is disabled the image search will return random results.
+    When the model is disabled, :meth:`~ImageSearch.feature_extract` returns
+    random vectors, so search results will be meaningless.
 
 Config
 ------
@@ -49,7 +49,7 @@ Config
 | Option                     | Description                                                             | Default          |
 +============================+=========================================================================+==================+
 | ``IMAGE_SEARCH_NAMESPACE`` | Scopes the vector table to this feature extractor. Auto-derived from    | (auto-derived)   |
-|                            | the Keras model's config hash so switching backbones never reuses       |                  |
+|                            | the model architecture hash so switching backbones never reuses         |                  |
 |                            | stale vectors. Override only if you need a stable, human-readable name. |                  |
 +----------------------------+-------------------------------------------------------------------------+------------------+
 
