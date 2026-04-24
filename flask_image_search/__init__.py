@@ -127,12 +127,15 @@ class GenericBackend(VectorBackend):
         self._stores[tablename] = SimpleNamespace(
             table=table,
             dim=dim,
-            matrix=None,
-            pks=None,
             image_search=image_search,
             created=False,
         )
         self._ensure_created(tablename)
+
+    # Rows per streaming chunk during search. At dim=4096 float32, a chunk of
+    # 4096 holds ~64 MB — bounded regardless of corpus size. Override in a
+    # subclass for constrained hosts (smaller) or fat corpora (larger).
+    _CHUNK_SIZE = 4096
 
     def _ensure_created(self, tablename):
         store = self._stores[tablename]
@@ -144,10 +147,6 @@ class GenericBackend(VectorBackend):
             return
         store.table.create(bind=engine, checkfirst=True)
         store.created = True
-
-    def _invalidate(self, store):
-        store.matrix = None
-        store.pks = None
 
     def _encode(self, vector, dim):
         arr = np.asarray(vector, dtype=np.float32)
@@ -162,53 +161,43 @@ class GenericBackend(VectorBackend):
         table = store.table
         connection.execute(table.delete().where(table.c.pk == pk))
         connection.execute(table.insert().values(pk=pk, embedding=blob))
-        self._invalidate(store)
 
     def delete(self, connection, model, pk):
         self._ensure_created(model.__tablename__)
         store = self._stores[model.__tablename__]
         connection.execute(store.table.delete().where(store.table.c.pk == pk))
-        self._invalidate(store)
-
-    def _load(self, model):
-        store = self._stores[model.__tablename__]
-        if store.matrix is not None:
-            return store
-
-        self._ensure_created(model.__tablename__)
-        conn = store.image_search.db.session.connection()
-        rows = conn.execute(
-            select(store.table.c.pk, store.table.c.embedding).order_by(store.table.c.pk)
-        ).all()
-
-        if not rows:
-            store.matrix = np.zeros((0, store.dim), dtype=np.float32)
-            store.pks = []
-            return store
-
-        pks = [r[0] for r in rows]
-        matrix = np.empty((len(rows), store.dim), dtype=np.float32)
-        for i, (_, blob) in enumerate(rows):
-            matrix[i] = np.frombuffer(blob, dtype=np.float32)
-
-        store.matrix = matrix
-        store.pks = pks
-        return store
 
     def search(self, model, query_vector, sorted=True, limit=None):
-        store = self._load(model)
-        if store.matrix.shape[0] == 0:
+        self._ensure_created(model.__tablename__)
+        store = self._stores[model.__tablename__]
+        query = np.asarray(query_vector, dtype=np.float32)
+
+        pks = []
+        dists = []
+        chunk = np.empty((self._CHUNK_SIZE, store.dim), dtype=np.float32)
+
+        with store.image_search.db.engine.connect() as conn:
+            result = conn.execute(
+                select(store.table.c.pk, store.table.c.embedding).order_by(store.table.c.pk)
+            )
+            for rows in iter(lambda: result.fetchmany(self._CHUNK_SIZE), []):
+                n = len(rows)
+                buf = chunk[:n] if n == self._CHUNK_SIZE else np.empty((n, store.dim), dtype=np.float32)
+                for i, (_, blob) in enumerate(rows):
+                    buf[i] = np.frombuffer(blob, dtype=np.float32)
+                chunk_dists = np.linalg.norm(buf - query, axis=1)
+                pks.extend(r[0] for r in rows)
+                dists.extend(chunk_dists.tolist())
+
+        if not pks:
             return ()
 
-        query = np.asarray(query_vector, dtype=np.float32)
-        distances = np.linalg.norm(store.matrix - query, axis=1)
-
         if sorted:
-            order = np.argsort(distances, kind="stable")
+            order = np.argsort(np.asarray(dists), kind="stable")
         else:
-            order = range(len(distances))
+            order = range(len(dists))
 
-        results = tuple((store.pks[i], float(distances[i])) for i in order)
+        results = tuple((pks[i], float(dists[i])) for i in order)
         if limit is not None:
             results = results[:limit]
         return results
@@ -234,8 +223,8 @@ class GenericBackend(VectorBackend):
     def count_indexed(self, model):
         self._ensure_created(model.__tablename__)
         store = self._stores[model.__tablename__]
-        conn = store.image_search.db.session.connection()
-        return conn.execute(select(func.count()).select_from(store.table)).scalar() or 0
+        with store.image_search.db.engine.connect() as conn:
+            return conn.execute(select(func.count()).select_from(store.table)).scalar() or 0
 
     def is_indexed(self, connection, model, pk):
         store = self._stores[model.__tablename__]
@@ -365,10 +354,13 @@ class SqliteVecBackend(VectorBackend):
         conn = store.image_search.db.session.connection()
 
         if limit is not None:
-            # Fast KNN path — sqlite-vec uses its ANN index
+            # Fast KNN path — sqlite-vec uses its ANN index. `distance` here is
+            # squared L2; sqrt it on the way out so results match GenericBackend
+            # and PgVectorBackend (true L2). Ordering stays on raw `distance`
+            # since sqrt is monotonic — same ranking, cheaper sort.
             rows = conn.execute(
                 text(
-                    f"SELECT pk, distance FROM {store.vec_tablename} "
+                    f"SELECT pk, sqrt(distance) FROM {store.vec_tablename} "
                     f"WHERE embedding MATCH :q ORDER BY distance LIMIT :lim"
                 ),
                 {"q": blob, "lim": limit},
@@ -608,6 +600,7 @@ class ImageSearch(object):
             self.init_app(app, **kwargs)
 
     def init_app(self, app, load_model=True, backend=None, namespace=None):
+        self.app = app
         self.root = app.root_path
 
         sqlalchemy = app.extensions.get("sqlalchemy")
@@ -631,6 +624,14 @@ class ImageSearch(object):
         if backend is None:
             backend = _auto_backend(self.db.engine.dialect.name)
         self.backend = backend
+
+        # SQLite's default rollback journal serialises readers and writers,
+        # deadlocking any background indexing thread. WAL lets readers run
+        # concurrently with a single writer, which is what the library needs.
+        if self.db.engine.dialect.name == "sqlite":
+            @event.listens_for(self.db.engine, "connect")
+            def _sqlite_pragmas(dbapi_conn, _):
+                dbapi_conn.execute("PRAGMA journal_mode=WAL")
 
     @property
     def namespace(self):
@@ -762,46 +763,33 @@ class ImageSearch(object):
         pk = getattr(entry, self.models[entry.__tablename__].id)
         self.backend.delete(connection, model, pk)
 
-    def _session_connection(self):
-        """Return the caller's active connection.
-
-        Routing writes through ``db.session.connection()`` means the vector
-        write participates in whatever transaction the caller already owns —
-        a Flask request handler's request-scoped session, a test fixture's
-        rollback-wrapped transaction, or an explicit ``with db.session.begin()``
-        block. A flush is required because the underlying SQLAlchemy events
-        that wire vector writes to parent-row writes only fire on flush.
-        """
-        return self.db.session.connection()
-
     def index(self, entry, replace=False):
-        result = self._on_upsert(self._session_connection(), entry, replace=replace)
-        self.db.session.flush()
-        return result
+        with self.db.engine.begin() as conn:
+            return self._on_upsert(conn, entry, replace=replace)
 
     def index_model(self, model, replace=False, threaded=True):
-        def thread_content():
-            entries = self.db.session.query(model).options(lazyload("*")).all()
-            total = 0
-            indexed = 0
-            conn = self._session_connection()
-            for entry in entries:
-                total += 1
-                if self._on_upsert(conn, entry, replace=replace):
-                    indexed += 1
-            self.db.session.flush()
-            logger.info(
-                f"Indexed {indexed} of {total} images for the model {model.__tablename__}"
-            )
+        def run():
+            with self.app.app_context():
+                entries = self.db.session.query(model).options(lazyload("*")).all()
+                total = 0
+                indexed = 0
+                with self.db.engine.begin() as conn:
+                    for entry in entries:
+                        total += 1
+                        if self._on_upsert(conn, entry, replace=replace):
+                            indexed += 1
+                logger.info(
+                    f"Indexed {indexed} of {total} images for the model {model.__tablename__}"
+                )
 
         if threaded:
-            threading.Thread(target=thread_content).start()
+            threading.Thread(target=run).start()
         else:
-            thread_content()
+            run()
 
     def delete_index(self, entry):
-        self._on_delete(self._session_connection(), entry)
-        self.db.session.flush()
+        with self.db.engine.begin() as conn:
+            self._on_delete(conn, entry)
 
     def _resolve_query_image(self, image):
         if isinstance(image, str):
