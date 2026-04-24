@@ -1,95 +1,75 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
-
 name: CI/CD
 
 on:
   push:
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  test_and_lint:
-
+  test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.6, 3.7, 3.8]
+        python-version: ["3.8", "3.11", "3.12", "3.13"]
 
-    name: Test and Lint (python ${{ matrix.python-version }})
+    name: Test (Python ${{ matrix.python-version }})
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Cache PIP
-      id: cache-pip
-      uses: actions/cache@v2
-      with:
-        path: ~/.cache/pip
-        key: python${{ matrix.python-version }}-pip-${{ hashFiles('./setup.cfg') }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install setuptools wheel flake8 pytest
-        python -m pip install .
-        if [ -f requirements_dev.txt ]; then pip install -r requirements_dev.txt; fi
-    - name: Lint with flake8
-      run: |
-        # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    - name: Test with pytest
-      run: |
-        pytest
+      - uses: actions/checkout@v4
 
-  deploy_check:
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: python${{ matrix.python-version }}-pip-${{ hashFiles('pyproject.toml') }}
+
+      - name: Install PyTorch (CPU-only)
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install package and dev deps
+        run: pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: ruff check flask_image_search tests
+
+      - name: Test with pytest
+        run: pytest
+
+  publish:
     runs-on: ubuntu-latest
-    name: Deploy Check
-    needs:
-    - test_and_lint
-    outputs:
-      valid: ${{ steps.check.outputs.valid }}
-    steps:
-      - name: Check tag
-        id: check
-        run: |
-          if [[ ${{ github.ref }} =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9](\..+)?$ ]];
-          then echo "::set-output name=valid::true";
-          else echo "::set-output name=valid::false";
-          fi;
-
-  deploy:
-    runs-on: ubuntu-latest
-    name: Deploy
-    needs:
-    - test_and_lint
-    - deploy_check
-    if: needs.deploy_check.outputs.valid == 'true'
+    name: Publish to PyPI
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC trusted publishing -- no stored credentials needed
+      contents: write   # creating the GitHub release
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: '3.x'
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install setuptools wheel twine
-    - name: Build
-      run: |
-        python setup.py sdist bdist_wheel
-    - name: Publish
-      run: |
-        twine upload dist/* -u ${{ secrets.PYPI_USERNAME }} -p ${{ secrets.PYPI_PASSWORD }}
-    - name: Release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: dist/*
+      - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build
+        run: pip install build
+
+      - name: Build
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
