@@ -81,5 +81,5 @@ dist: clean ## builds source and wheel package
 	python -m build
 	ls -l dist
 
-install: clean ## install the package to the active Python's site-packages
-	pip install -e .
+install: clean ## install the package in editable mode with dev dependencies
+	pip install -e ".[dev]"
