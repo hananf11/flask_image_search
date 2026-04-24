@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "setuptools_scm"]
+requires = ["setuptools>=68"]
 build-backend = "setuptools.backends.legacy:build"
 
 [project]
@@ -30,8 +30,8 @@ dependencies = [
     "SQLAlchemy>=1.4",
     "pillow>=8.2",
     "numpy>=1.21",
-    "torch>=1.9",
-    "torchvision>=0.10",
+    "torch>=1.12",
+    "torchvision>=0.13",
 ]
 
 [project.urls]
@@ -48,7 +48,6 @@ dev = [
     "coverage",
     "ruff",
     "sphinx",
-    "twine",
     "pallets_sphinx_themes",
     "bump-my-version",
     "pre-commit",
