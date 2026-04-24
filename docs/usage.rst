@@ -45,11 +45,13 @@ Alternatively you if you're using a `factory`_::
 Config
 ------
 
-+---------------------------------+------------------------------------------------------------------------------------------------------------+--------------------+
-| Option                          | Description                                                                                                | Default            |
-+=================================+============================================================================================================+====================+
-| ``IMAGE_SEARCH_PATH_PREFIX``    | This is a prefix that is added to the model ``__tablename__`` to get the file path for the index file.     | ``image_search/``  |
-+---------------------------------+------------------------------------------------------------------------------------------------------------+--------------------+
++----------------------------+-------------------------------------------------------------------------+------------------+
+| Option                     | Description                                                             | Default          |
++============================+=========================================================================+==================+
+| ``IMAGE_SEARCH_NAMESPACE`` | Scopes the vector table to this feature extractor. Auto-derived from    | (auto-derived)   |
+|                            | the Keras model's config hash so switching backbones never reuses       |                  |
+|                            | stale vectors. Override only if you need a stable, human-readable name. |                  |
++----------------------------+-------------------------------------------------------------------------+------------------+
 
 Registering Models
 ------------------
@@ -123,7 +125,7 @@ It is possible to manually delete an image from the index::
 
     image = Image.query.first()
 
-    image_search.delete(Image)
+    image_search.delete_index(image)
 
 
 Making a query
@@ -174,6 +176,34 @@ Heres how to get the distance as a mapped attribute on your Model::
     case_statement = image_search.case("./image_path/image.png", Image).label("distance")
     images = Image.query.options(db.with_expression(Image.distance, case_statement)) \
              .order_by("distance").all()
+
+Vector Storage Backends
+-----------------------
+
+Flask-Image-Search automatically selects a vector storage backend based on
+your database dialect and what is installed:
+
+- **SQLite + sqlite-vec** → :class:`SqliteVecBackend` — KNN search runs inside
+  SQLite; no corpus loaded into Python memory. Requires ``pip install flask-image-search[sqlite]``
+  and a Python build with ``SQLITE_ENABLE_LOAD_EXTENSION`` (Ubuntu, macOS;
+  **not** Fedora/RHEL). Falls back to :class:`GenericBackend` automatically.
+- **PostgreSQL + pgvector** → :class:`PgVectorBackend` — native ``vector``
+  column type with ``<->`` L2 operator; benefits from HNSW/IVFFlat indexes.
+  Requires ``pip install flask-image-search[postgres]``.
+- **Everything else** → :class:`GenericBackend` — works on every dialect.
+  Stores BLOBs in a sibling SQL table; loads all vectors into a NumPy matrix
+  in RAM and does a brute-force L2 scan (O(N)). Fast up to ~50 K images;
+  memory grows linearly (10 K VGG16 vectors ≈ 160 MB RAM).
+
+To check whether SQLite extension loading is available on your system::
+
+    python3 -c "import sqlite3; c=sqlite3.connect(':memory:'); print(hasattr(c,'enable_load_extension'))"
+
+To choose a backend explicitly instead of relying on auto-selection::
+
+    from flask_image_search import ImageSearch, SqliteVecBackend
+
+    image_search = ImageSearch(app, backend=SqliteVecBackend())
 
 Advanced
 --------
