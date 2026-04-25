@@ -9,14 +9,13 @@ description = "Image Searching For Flask and Flask-SQLAlchemy."
 readme = {file = "README.rst", content-type = "text/x-rst"}
 license = {text = "MIT"}
 authors = [{name = "Hanan Fokkens", email = "hananfokkens@gmail.com"}]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Natural Language :: English",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -42,15 +41,24 @@ Documentation = "https://flask-image-search.readthedocs.io"
 [project.optional-dependencies]
 sqlite = ["sqlite-vec"]
 postgres = ["pgvector"]
-docs = ["pallets_sphinx_themes"]
+
+# Tooling for working on the package itself. Not shipped in the wheel.
+# Requires pip >= 25.1 (or uv, hatch, pdm) to install with `pip install --group dev`.
+[dependency-groups]
 dev = [
     "pytest",
     "coverage",
     "ruff",
-    "sphinx",
-    "pallets_sphinx_themes",
     "bump-my-version",
     "pre-commit",
+    "poethepoet",
+    {include-group = "docs"},
+]
+docs = [
+    "Sphinx>=6",
+    "Pallets-Sphinx-Themes>=2.0",
+    "sphinx-autobuild",
+    "sphinxcontrib-log-cabinet",
 ]
 
 [tool.setuptools.dynamic]
@@ -80,3 +88,14 @@ select = ["E", "F", "W", "I"]
 
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = "double"
+
+# Run common dev tasks via `poe <task>` (e.g. `poe docs`).
+# Add or rename tasks here -- they're discoverable with `poe --help`.
+[tool.poe.tasks]
+test = {cmd = "pytest", help = "Run the test suite"}
+lint = {cmd = "ruff check", help = "Check lint"}
+fix = {cmd = "ruff check --fix", help = "Auto-fix lint issues"}
+docs = {cmd = "sphinx-autobuild docs docs/_build/html --open-browser", help = "Live-reload docs server"}
+docs-build = {cmd = "sphinx-build -b html docs docs/_build/html", help = "One-shot docs build"}
+example = {cmd = "python examples/example_app.py", help = "Run the demo Flask app"}
+fixtures = {cmd = "python tests/generate_fixtures.py", help = "Regenerate test feature vectors"}

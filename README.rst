@@ -115,19 +115,22 @@ See `HISTORY.rst`_ for the full changelog.
 Development
 -----------
 
-**Setup**::
+**Setup** (requires pip >= 25.1, or use uv/hatch/pdm)::
 
-    pip install -e ".[dev]"
+    pip install -e . --group dev
     pre-commit install --hook-type pre-commit --hook-type pre-push
 
 This installs the package in editable mode with all dev tools, and wires up
 two git hooks: ruff runs on every commit, the full pytest suite runs on every
 push so broken code can't reach the remote.
 
-**Common commands**::
+**Common commands** (via poethepoet; ``poe --help`` lists every task)::
 
-    pytest                            # run tests
-    ruff check                           # lint
+    poe test          # run tests
+    poe lint          # ruff check
+    poe fix           # ruff check --fix
+    poe docs          # live-reload docs server at http://127.0.0.1:8000
+    poe example       # run the demo Flask app
 
 **Cutting a release**::
 

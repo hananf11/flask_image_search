@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
     name: Test (Python ${{ matrix.python-version }})
 
@@ -30,11 +30,14 @@ jobs:
           path: ~/.cache/pip
           key: python${{ matrix.python-version }}-pip-${{ hashFiles('pyproject.toml') }}
 
+      - name: Upgrade pip (PEP 735 dependency-groups need pip >= 25.1)
+        run: python -m pip install --upgrade "pip>=25.1"
+
       - name: Install PyTorch (CPU-only)
         run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install package and dev deps
-        run: pip install -e ".[dev]"
+        run: pip install -e . --group dev
 
       - name: Lint with ruff
         run: ruff check
