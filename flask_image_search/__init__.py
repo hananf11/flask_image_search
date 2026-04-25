@@ -622,7 +622,11 @@ class ImageSearch(object):
         )
 
         if backend is None:
-            backend = _auto_backend(self.db.engine.dialect.name)
+            # db.engine on Flask-SQLAlchemy 3.x requires an active app context;
+            # push one ourselves so callers can construct ImageSearch at
+            # module import time without manually wrapping the call.
+            with app.app_context():
+                backend = _auto_backend(self.db.engine.dialect.name)
         self.backend = backend
 
     @property
