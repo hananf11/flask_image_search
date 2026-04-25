@@ -1,2 +1,4 @@
-pallets_sphinx_themes==1.2.3
-sphinx==4.2.0
+Sphinx>=7,<9
+Pallets-Sphinx-Themes>=2.1
+sphinx-autobuild>=2024.0
+sphinxcontrib-log-cabinet>=1.0
