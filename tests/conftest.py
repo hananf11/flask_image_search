@@ -108,7 +108,9 @@ class ImageSearchInceptionV3(ImageSearch):
 
 @pytest.fixture
 def app():
-    return Flask(__name__)
+    app = Flask(__name__)
+    with app.app_context():
+        yield app
 
 
 @pytest.fixture(ids=["test.db"])
