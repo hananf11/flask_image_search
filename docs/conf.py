@@ -3,9 +3,8 @@ import sys
 
 sys.path.insert(0, os.path.abspath(".."))
 
-from pallets_sphinx_themes import ProjectLink  # noqa: E402
-
 from flask_image_search import __about__  # noqa: E402
+from pallets_sphinx_themes import ProjectLink  # noqa: E402
 
 # -- Project information -----------------------------------------------------
 

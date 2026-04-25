@@ -201,7 +201,8 @@ To check whether SQLite extension loading is available on your system::
 
 To choose a backend explicitly instead of relying on auto-selection::
 
-    from flask_image_search import ImageSearch, SqliteVecBackend
+    from flask_image_search import ImageSearch
+    from flask_image_search.backends import SqliteVecBackend
 
     image_search = ImageSearch(app, backend=SqliteVecBackend())
 
