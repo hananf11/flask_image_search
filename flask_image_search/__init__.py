@@ -1,7 +1,5 @@
-import hashlib
 import logging
 import os
-import re
 import threading
 from types import SimpleNamespace
 
@@ -17,6 +15,7 @@ from flask_image_search.__about__ import (
     __version__,
 )
 from flask_image_search.backends import auto_backend
+from flask_image_search.helper import derive_namespace
 
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler()
@@ -34,25 +33,6 @@ __all__ = (
 )
 
 
-
-
-_NAMESPACE_SAFE = re.compile(r"[^A-Za-z0-9_]+")
-
-
-def _derive_namespace(model, dim=None):
-    """Derive a stable, table-name-safe namespace from a torch.nn.Module.
-
-    Any change to architecture or output dimension flows through to a different
-    namespace, so switching backbones never silently reuses stale vectors.
-    ``str(model)`` produces a stable layer-dump that changes with architecture.
-    """
-    if model is None:
-        return "default"
-
-    name = model.__class__.__name__.lower()
-    short = hashlib.sha1(str(model).encode("utf-8")).hexdigest()[:8]
-    raw = f"{name}_{dim or 'x'}_{short}"
-    return _NAMESPACE_SAFE.sub("_", raw).strip("_") or "default"
 
 
 # --------------------------------------------------------------------------- #
@@ -97,7 +77,7 @@ class ImageSearch(object):
         self._namespace = (
             namespace
             or app.config.get("IMAGE_SEARCH_NAMESPACE")
-            or _derive_namespace(self.model, self.feature_size)
+            or derive_namespace(self.model, self.feature_size)
         )
 
         if backend is None:

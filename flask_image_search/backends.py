@@ -33,6 +33,8 @@ from sqlalchemy import (
     column as sa_column,
 )
 
+from flask_image_search.helper import encode_vector, rank_results, vector_table_name
+
 
 class VectorBackend:
     """Storage backend for indexed feature vectors."""
@@ -88,7 +90,7 @@ class GenericBackend(VectorBackend):
         pk_type = pk_col.property.columns[0].type.copy()
 
         metadata = model.metadata
-        vec_tablename = f"{tablename}_vectors__{image_search.namespace}"
+        vec_tablename = vector_table_name(tablename, image_search.namespace)
 
         if vec_tablename in metadata.tables:
             table = metadata.tables[vec_tablename]
@@ -119,16 +121,10 @@ class GenericBackend(VectorBackend):
         store.table.create(bind=engine, checkfirst=True)
         store.created = True
 
-    def _encode(self, vector, dim):
-        arr = np.asarray(vector, dtype=np.float32)
-        if arr.shape != (dim,):
-            raise ValueError(f"expected vector of shape ({dim},), got {arr.shape}")
-        return arr.tobytes()
-
     def upsert(self, connection, model, pk, vector):
         self._ensure_created(model.__tablename__)
         store = self._stores[model.__tablename__]
-        blob = self._encode(vector, store.dim)
+        blob = encode_vector(vector, store.dim)
         table = store.table
         connection.execute(table.delete().where(table.c.pk == pk))
         connection.execute(table.insert().values(pk=pk, embedding=blob))
@@ -160,18 +156,7 @@ class GenericBackend(VectorBackend):
                 pks.extend(r[0] for r in rows)
                 dists.extend(chunk_dists.tolist())
 
-        if not pks:
-            return ()
-
-        if sorted:
-            order = np.argsort(np.asarray(dists), kind="stable")
-        else:
-            order = range(len(dists))
-
-        results = tuple((pks[i], float(dists[i])) for i in order)
-        if limit is not None:
-            results = results[:limit]
-        return results
+        return rank_results(pks, dists, sorted=sorted, limit=limit)
 
     def distance_expr(self, model, query_vector, column, limit=None):
         results = self.search(model, query_vector, sorted=limit is not None, limit=limit)
@@ -391,7 +376,7 @@ class PgVectorBackend(VectorBackend):
         pk_type = pk_col.property.columns[0].type.copy()
 
         metadata = model.metadata
-        vec_tablename = f"{tablename}_vectors__{image_search.namespace}"
+        vec_tablename = vector_table_name(tablename, image_search.namespace)
 
         if vec_tablename in metadata.tables:
             table = metadata.tables[vec_tablename]
