@@ -211,10 +211,10 @@ Advanced
 Changing the backbone model
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-By default Flask-Image-Search uses `torchvision VGG16`_ for feature extraction
-(4096-d output, ImageNet weights). Override :meth:`~ImageSearch.get_model`,
-:meth:`~ImageSearch.get_feature_size`, and optionally
-:meth:`~ImageSearch.get_input_size` to swap to any ``torch.nn.Module``::
+By default Flask-Image-Search uses `torchvision VGG16`_ (4096-d, ImageNet
+weights) and the preprocessing pipeline that ships with those weights.
+Subclass :class:`ImageSearch` and override the relevant hooks to swap to
+any ``torch.nn.Module``::
 
     import torchvision
     from torch import nn
@@ -225,7 +225,9 @@ By default Flask-Image-Search uses `torchvision VGG16`_ for feature extraction
         def get_model(self):
             import torch
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            m = torchvision.models.inception_v3(weights=torchvision.models.Inception_V3_Weights.DEFAULT)
+            m = torchvision.models.inception_v3(
+                weights=torchvision.models.Inception_V3_Weights.DEFAULT
+            )
             m.fc = nn.Identity()   # 2048-d output from the final pooling layer
             m.aux_logits = False
             m.to(self.device)
@@ -235,18 +237,23 @@ By default Flask-Image-Search uses `torchvision VGG16`_ for feature extraction
         def get_feature_size(self):
             return 2048
 
-        def get_input_size(self):
-            return (299, 299)
+        def get_preprocess(self):
+            return torchvision.models.Inception_V3_Weights.DEFAULT.transforms()
 
-The default ``feature_extract`` implementation resizes the image to
-``get_input_size()``, applies standard ImageNet normalisation, runs a forward
-pass, and L2-normalises the output. For most backbones this requires no
-further overrides.
+The hooks:
+
+- :meth:`~ImageSearch.get_model` — return the ``torch.nn.Module`` and set
+  ``self.device``.
+- :meth:`~ImageSearch.get_feature_size` — output dimensionality.
+- :meth:`~ImageSearch.get_preprocess` — the PIL→tensor transform. The
+  default uses ``VGG16_Weights.DEFAULT.transforms()``, which handles
+  resize, crop and normalise. Each torchvision weights enum exposes a
+  matching ``.transforms()`` so you rarely need to write one by hand.
 
 .. note::
-    Switching backbones invalidates existing indexed vectors. The namespace
-    is derived from the model architecture, so Flask-Image-Search will
-    automatically create a fresh vector table — but you must re-index::
+    Switching backbones invalidates existing indexed vectors. The
+    namespace is derived from the model architecture, so a fresh vector
+    table is created automatically — but you must re-index::
 
         image_search.index_model(Image)
 

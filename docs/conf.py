@@ -45,7 +45,6 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # -- HTML output -------------------------------------------------------------
 
 html_theme = "flask"
-html_theme_options = {"index_sidebar_logo": False}
 html_context = {
     "project_links": [
         ProjectLink("PyPI Releases", "https://pypi.org/project/Flask-Image-Search/"),
@@ -54,8 +53,7 @@ html_context = {
     ]
 }
 html_sidebars = {
-    "index": ["project.html", "localtoc.html", "searchbox.html"],
-    "**": ["localtoc.html", "relations.html", "searchbox.html"],
+    "**": ["project.html", "localtoc.html", "relations.html", "searchbox.html"],
 }
 html_title = f"Flask-Image-Search Documentation ({version})"
 html_show_sourcelink = False

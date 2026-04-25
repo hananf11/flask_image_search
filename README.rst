@@ -15,129 +15,54 @@ Flask Image Search
         :alt: Documentation Status
 
 
-
-
-Flask Image Search is an extension for flask that makes it easy to add image searching to your flask site.
-
+Flask Image Search is an extension for Flask that adds content-based image
+search to a Flask + Flask-SQLAlchemy app. Features are extracted with a
+PyTorch CNN and stored alongside your model rows; queries are ranked by
+L2 distance.
 
 * Free software: MIT license
-* Documentation: https://flask-image-search.readthedocs.io.
+* Documentation: https://flask-image-search.readthedocs.io
 
 
 Features
 --------
 
-* Works with `Flask-SQLAlchemy`_ to make searching your database easy.
-* Searching is fast
-* The indexed images take up very little storage
-* Database changes automatically update the image indexes
+* Works with `Flask-SQLAlchemy`_ — search your database directly.
+* Indexes update automatically when rows are added, edited, or deleted.
+* Pluggable storage backends: works on any SQL dialect; opts into
+  ``sqlite-vec`` or ``pgvector`` when available for ANN-accelerated KNN.
 
 .. _Flask-SQLAlchemy: https://flask-sqlalchemy.palletsprojects.com/
 
-How it works
-------------
+Install
+-------
 
-Flask-Image-Search uses a `CNN (Convolutional neural network) <https://en.wikipedia.org/wiki/Convolutional_neural_network>`_,
-the CNN is used to extract the features from the images in a dataset. The features are stored so they can be searched later with a query image.
-When an image is searched it's features are extracted and compared with all the other images to get the distance from the search image,
-the distances are then used to sort the images.
+::
 
-Vector Storage Backends
------------------------
+    pip install flask-image-search
 
-Flask-Image-Search automatically picks the best available backend for your database.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 25 55
-
-   * - Backend
-     - Selected when
-     - Notes
-   * - ``GenericBackend``
-     - Always (fallback)
-     - Works on every database Flask-SQLAlchemy supports. Loads all vectors
-       into a NumPy matrix in RAM on first query; brute-force L2 scan is
-       O(N). Fast up to ~50 K images; memory grows linearly (10 K VGG16
-       vectors ≈ 160 MB RAM).
-   * - ``SqliteVecBackend``
-     - SQLite + ``sqlite-vec`` installed + extension loading supported
-     - Vectors stay in SQLite; KNN queries use sqlite-vec's ANN index (≈
-       O(log N)). No corpus loaded into Python memory. Falls back to
-       ``GenericBackend`` automatically if the extension cannot be loaded.
-   * - ``PgVectorBackend``
-     - PostgreSQL + ``pgvector`` installed
-     - Native ``vector`` column type; ``<->`` L2 operator benefits from
-       HNSW / IVFFlat indexes. Correlated-subquery ordering integrates
-       cleanly with arbitrary SQLAlchemy queries.
-
-**Checking SQLite extension support**
-
-``SqliteVecBackend`` requires Python's ``sqlite3`` to be compiled with
-``SQLITE_ENABLE_LOAD_EXTENSION``. Ubuntu, Debian, and macOS Python builds
-include this; Fedora / RHEL builds typically do not. Check with::
-
-    python3 -c "import sqlite3; c=sqlite3.connect(':memory:'); print(hasattr(c,'enable_load_extension'))"
-
-If this prints ``False``, install ``pysqlite3-binary`` and configure
-SQLAlchemy to use it, or use ``GenericBackend`` (the automatic fallback).
-
-**Installing optional backends**::
-
-    pip install flask-image-search[sqlite]    # SqliteVecBackend
-    pip install flask-image-search[postgres]  # PgVectorBackend
-
-**Choosing a backend explicitly**::
-
-    from flask_image_search import ImageSearch, SqliteVecBackend
-
-    image_search = ImageSearch(app, backend=SqliteVecBackend())
-
-Migrating from 1.x
-------------------
-
-Version 2.0 replaces TensorFlow/Keras with PyTorch. Existing indexed vectors
-are **not compatible** and must be regenerated.
-
-Quick checklist:
-
-* ``pip install flask-image-search==2.0.0`` (drops ``tensorflow`` / ``Keras`` deps)
-* Rename ``create_keras_model()`` → ``get_model()`` in any subclass
-* Remove ``preprocess_image_array()`` overrides (fold into ``feature_extract`` if needed)
-* Rename ``self.keras_model`` → ``self.model``
-* Rename ``init_app(tensorflow=False)`` → ``init_app(load_model=False)``
-* Re-index all images: ``image_search.index_model(YourImageModel)``
-
-See `HISTORY.rst`_ for the full changelog.
-
-.. _HISTORY.rst: https://github.com/hananf11/flask_image_search/blob/main/HISTORY.rst
+See the `documentation <https://flask-image-search.readthedocs.io>`_ for
+usage, backend options, and the migration guide from 1.x.
 
 Development
 -----------
 
-**Setup** (requires pip >= 25.1, or use uv/hatch/pdm)::
+Requires Python 3.9+ and pip 25.1+::
 
     pip install -e . --group dev
     pre-commit install --hook-type pre-commit --hook-type pre-push
 
-This installs the package in editable mode with all dev tools, and wires up
-two git hooks: ruff runs on every commit, the full pytest suite runs on every
-push so broken code can't reach the remote.
-
-**Common commands** (via poethepoet; ``poe --help`` lists every task)::
+Common tasks (``poe --help`` lists everything)::
 
     poe test          # run tests
     poe lint          # ruff check
-    poe fix           # ruff check --fix
-    poe docs          # live-reload docs server at http://127.0.0.1:8000
+    poe docs          # live-reload docs server
     poe example       # run the demo Flask app
 
-**Cutting a release**::
+Cutting a release::
 
-    # 1. Add a HISTORY.rst entry describing the changes
-    # 2. Bump the version (updates __about__.py, commits, and tags automatically)
-    bump-my-version bump patch        # or: minor / major
-    git push --tags                   # CI builds, publishes to PyPI, creates GitHub release
+    bump-my-version bump patch    # or: minor / major
+    git push --tags               # CI publishes to PyPI
 
 Credits
 -------
