@@ -4,9 +4,12 @@ import threading
 from types import SimpleNamespace
 
 import numpy as np
+import torch
+import torchvision
 from PIL import Image
 from sqlalchemy import event
 from sqlalchemy.orm import lazyload
+from torchvision.models import VGG16_Weights
 
 from flask_image_search.__about__ import (
     __author__,
@@ -18,14 +21,10 @@ from flask_image_search.backends import auto_backend
 from flask_image_search.helper import derive_namespace
 
 logger = logging.getLogger(__name__)
-handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter("%(asctime)s flask image search: %(message)s"))
-logger.addHandler(handler)
-logger.setLevel(logging.INFO)
-
 
 __all__ = (
     "ImageSearch",
+    "ImageSearchError",
     __version__,
     __author__,
     __author_email__,
@@ -33,14 +32,11 @@ __all__ = (
 )
 
 
+class ImageSearchError(Exception):
+    """Raised for setup / configuration problems in Flask-Image-Search."""
 
 
-# --------------------------------------------------------------------------- #
-# ImageSearch
-# --------------------------------------------------------------------------- #
-
-
-class ImageSearch(object):
+class ImageSearch:
     """Flask extension adding content-based image search.
 
     .. code-block:: python
@@ -64,8 +60,8 @@ class ImageSearch(object):
 
         sqlalchemy = app.extensions.get("sqlalchemy")
         if sqlalchemy is None:
-            raise Exception(
-                "You need to initialize Flask-SQLAlchemy before Flask-Image-Search."
+            raise ImageSearchError(
+                "Flask-SQLAlchemy must be initialised on the app before Flask-Image-Search."
             )
         self.db = getattr(sqlalchemy, "db", sqlalchemy)
 
@@ -108,19 +104,16 @@ class ImageSearch(object):
         Default: torchvision VGG16 with ImageNet weights, classifier
         truncated to the first FC layer (4096-d output).
         """
-        import torch
-        import torchvision
-
         # Prevents thread explosion on shared hosting (e.g. PythonAnywhere).
         torch.set_num_threads(1)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        backbone = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.DEFAULT)
+        backbone = torchvision.models.vgg16(weights=VGG16_Weights.DEFAULT)
         backbone.classifier = backbone.classifier[:1]
         for param in backbone.parameters():
             param.grad = None
         backbone.to(self.device)
-        backbone.train(False)  # inference mode — equivalent to .eval()
+        backbone.train(False)
         return backbone
 
     def get_feature_size(self):
@@ -128,7 +121,6 @@ class ImageSearch(object):
 
         Override if the probing forward-pass is too slow or unavailable.
         """
-        import torch
         test_input = torch.randn(1, 3, 224, 224).to(self.device)
         with torch.no_grad():
             return self.model(test_input).shape[1]
@@ -140,9 +132,7 @@ class ImageSearch(object):
         Override when using a custom backbone with different input requirements.
         Must accept a PIL image and return a float tensor of shape ``(C, H, W)``.
         """
-        import torchvision.models as M
-
-        return M.VGG16_Weights.DEFAULT.transforms()
+        return VGG16_Weights.DEFAULT.transforms()
 
     def feature_extract(self, image):
         """Extract an L2-normalised feature vector from a PIL image.
@@ -150,8 +140,6 @@ class ImageSearch(object):
         Override to use a fully custom extraction pipeline.
         Must return a 1-D float32 numpy array of length ``self.feature_size``.
         """
-        import torch
-
         if self.model is None:
             return np.random.rand(self.feature_size)
 
@@ -184,12 +172,6 @@ class ImageSearch(object):
             @event.listens_for(model, "after_update")
             def _updated(mapper, connection, target):
                 self._on_upsert(connection, target, replace=True)
-
-            try:
-                count = self.backend.count_indexed(model)
-                logger.info(f"Loaded {count} image features for '{model.__tablename__}'")
-            except Exception:
-                pass
 
             return model
 
