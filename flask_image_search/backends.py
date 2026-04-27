@@ -25,12 +25,8 @@ from sqlalchemy import (
     bindparam,
     event,
     func,
-    literal,
     select,
     text,
-)
-from sqlalchemy import (
-    case as sa_case,
 )
 from sqlalchemy import (
     column as sa_column,
@@ -39,7 +35,12 @@ from sqlalchemy import (
     table as sa_table,
 )
 
-from flask_image_search.helper import encode_vector, rank_results, vector_table_name
+from flask_image_search.helper import (
+    case_from_results,
+    encode_vector,
+    rank_results,
+    vector_table_name,
+)
 
 
 class VectorBackend:
@@ -71,6 +72,28 @@ class VectorBackend:
         always let upsert run.
         """
         return False
+
+    # Subclasses populate ``self._stores`` in __init__ and use these helpers.
+
+    def get_store(self, model):
+        """Lazy-create the vector table on first use, then return its store."""
+        self.ensure_created(model.__tablename__)
+        return self._stores[model.__tablename__]
+
+    def resolve_engine(self, tablename):
+        """Return the engine for ``tablename`` if we can, else None.
+
+        Returns None when the store is already created (no work to do) or
+        when there is no active Flask app context (Flask-SQLAlchemy 3.x
+        raises RuntimeError -- defer to the next call).
+        """
+        store = self._stores[tablename]
+        if store.created:
+            return None
+        try:
+            return store.image_search.db.engine
+        except RuntimeError:
+            return None
 
 
 class GenericBackend(VectorBackend):
@@ -114,38 +137,29 @@ class GenericBackend(VectorBackend):
             image_search=image_search,
             created=False,
         )
-        self._ensure_created(tablename)
+        self.ensure_created(tablename)
 
-    def _ensure_created(self, tablename):
+    def ensure_created(self, tablename):
+        engine = self.resolve_engine(tablename)
+        if engine is None:
+            return
         store = self._stores[tablename]
-        if store.created:
-            return
-        try:
-            engine = store.image_search.db.engine
-        except RuntimeError:
-            # No active Flask app context -- defer creation until the
-            # first call that runs inside one. RuntimeError is what
-            # Flask-SQLAlchemy 3.x raises here.
-            return
         store.table.create(bind=engine, checkfirst=True)
         store.created = True
 
     def upsert(self, connection, model, pk, vector):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         blob = encode_vector(vector, store.dim)
         table = store.table
         connection.execute(table.delete().where(table.c.pk == pk))
         connection.execute(table.insert().values(pk=pk, embedding=blob))
 
     def delete(self, connection, model, pk):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         connection.execute(store.table.delete().where(store.table.c.pk == pk))
 
     def search(self, model, query_vector, sorted=True, limit=None):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         query = np.asarray(query_vector, dtype=np.float32)
 
         pks = []
@@ -177,16 +191,10 @@ class GenericBackend(VectorBackend):
         results = self.search(
             model, query_vector, sorted=limit is not None, limit=limit
         )
-        if isinstance(column, str):
-            column = sa_column(column)
-        whens = [(column == literal(pk), literal(float(d))) for pk, d in results]
-        if not whens:
-            return None
-        return sa_case(*whens, else_=literal(float("inf")))
+        return case_from_results(column, results)
 
     def count_indexed(self, model):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         with store.image_search.db.engine.connect() as conn:
             return (
                 conn.execute(select(func.count()).select_from(store.table)).scalar()
@@ -194,8 +202,7 @@ class GenericBackend(VectorBackend):
             )
 
     def is_indexed(self, connection, model, pk):
-        store = self._stores[model.__tablename__]
-        self._ensure_created(model.__tablename__)
+        store = self.get_store(model)
         return (
             connection.execute(
                 select(store.table.c.pk).where(store.table.c.pk == pk)
@@ -260,24 +267,18 @@ class SqliteVecBackend(VectorBackend):
 
         self._stores[tablename] = SimpleNamespace(
             dim=dim,
-            vec_tablename=f"{tablename}_vec__{image_search.namespace}",
+            vec_tablename=vector_table_name(tablename, image_search.namespace, suffix="vec"),
             image_search=image_search,
             pk_type=pk_type,
             created=False,
         )
-        self._ensure_created(tablename)
+        self.ensure_created(tablename)
 
-    def _ensure_created(self, tablename):
+    def ensure_created(self, tablename):
+        engine = self.resolve_engine(tablename)
+        if engine is None:
+            return
         store = self._stores[tablename]
-        if store.created:
-            return
-        try:
-            engine = store.image_search.db.engine
-        except RuntimeError:
-            # No active Flask app context -- defer creation until the
-            # first call that runs inside one. RuntimeError is what
-            # Flask-SQLAlchemy 3.x raises here.
-            return
         self._patch_engine(engine)
         pk_sql = "INTEGER" if isinstance(store.pk_type, Integer) else "TEXT"
         with engine.begin() as conn:
@@ -297,8 +298,7 @@ class SqliteVecBackend(VectorBackend):
         )
 
     def upsert(self, connection, model, pk, vector):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         blob = self._serialize(vector)
         connection.execute(
             text(f"DELETE FROM {store.vec_tablename} WHERE pk = :pk"), {"pk": pk}
@@ -311,15 +311,13 @@ class SqliteVecBackend(VectorBackend):
         )
 
     def delete(self, connection, model, pk):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         connection.execute(
             text(f"DELETE FROM {store.vec_tablename} WHERE pk = :pk"), {"pk": pk}
         )
 
     def search(self, model, query_vector, sorted=True, limit=None):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         blob = self._serialize(query_vector)
 
         with store.image_search.db.engine.connect() as conn:
@@ -348,8 +346,7 @@ class SqliteVecBackend(VectorBackend):
         return tuple((row[0], float(row[1])) for row in rows)
 
     def distance_expr(self, model, query_vector, column, limit=None):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         if isinstance(column, str):
             column = sa_column(column)
 
@@ -372,14 +369,10 @@ class SqliteVecBackend(VectorBackend):
         # Limited: fast KNN via MATCH, then map results onto outer rows with CASE
         # so the ANN index actually gets used.
         results = self.search(model, query_vector, sorted=True, limit=limit)
-        whens = [(column == literal(pk), literal(float(d))) for pk, d in results]
-        if not whens:
-            return None
-        return sa_case(*whens, else_=literal(float("inf")))
+        return case_from_results(column, results)
 
     def count_indexed(self, model):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         with store.image_search.db.engine.connect() as conn:
             row = conn.execute(
                 text(f"SELECT COUNT(*) FROM {store.vec_tablename}")
@@ -427,42 +420,32 @@ class PgVectorBackend(VectorBackend):
             image_search=image_search,
             created=False,
         )
-        self._ensure_created(tablename)
+        self.ensure_created(tablename)
 
-    def _ensure_created(self, tablename):
+    def ensure_created(self, tablename):
+        engine = self.resolve_engine(tablename)
+        if engine is None:
+            return
         store = self._stores[tablename]
-        if store.created:
-            return
-        try:
-            engine = store.image_search.db.engine
-        except RuntimeError:
-            # No active Flask app context -- defer creation until the
-            # first call that runs inside one. RuntimeError is what
-            # Flask-SQLAlchemy 3.x raises here.
-            return
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            conn.commit()
         store.table.create(bind=engine, checkfirst=True)
         store.created = True
 
     def upsert(self, connection, model, pk, vector):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         vec = np.asarray(vector, dtype=np.float32).tolist()
         table = store.table
         connection.execute(table.delete().where(table.c.pk == pk))
         connection.execute(table.insert().values(pk=pk, embedding=vec))
 
     def delete(self, connection, model, pk):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         table = store.table
         connection.execute(table.delete().where(table.c.pk == pk))
 
     def search(self, model, query_vector, sorted=True, limit=None):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         vec = np.asarray(query_vector, dtype=np.float32).tolist()
         table = store.table
 
@@ -478,15 +461,13 @@ class PgVectorBackend(VectorBackend):
         return tuple((row[0], float(row[1])) for row in rows)
 
     def distance_expr(self, model, query_vector, column, limit=None):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         vec = np.asarray(query_vector, dtype=np.float32).tolist()
         table = store.table
 
-        if isinstance(column, str):
-            column = sa_column(column)
-
         if limit is None:
+            if isinstance(column, str):
+                column = sa_column(column)
             # Correlated subquery: PostgreSQL evaluates per outer row.
             return (
                 select(table.c.embedding.l2_distance(vec))
@@ -497,14 +478,10 @@ class PgVectorBackend(VectorBackend):
         # Limited: prefetch top-N so the ANN index (HNSW/IVFFlat) is used,
         # then map onto outer rows with CASE.
         results = self.search(model, query_vector, sorted=True, limit=limit)
-        whens = [(column == literal(pk), literal(float(d))) for pk, d in results]
-        if not whens:
-            return None
-        return sa_case(*whens, else_=literal(float("inf")))
+        return case_from_results(column, results)
 
     def count_indexed(self, model):
-        self._ensure_created(model.__tablename__)
-        store = self._stores[model.__tablename__]
+        store = self.get_store(model)
         with store.image_search.db.engine.connect() as conn:
             row = conn.execute(select(func.count()).select_from(store.table)).fetchone()
         return row[0]
