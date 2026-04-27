@@ -5,31 +5,23 @@ runtime I/O -- everything here can be exercised in a unit test without
 spinning up an app.
 """
 
-import hashlib
-import re
-
 import numpy as np
+import torch
 from sqlalchemy import case as sa_case
 from sqlalchemy import column as sa_column
 from sqlalchemy import literal
 
-_NAMESPACE_SAFE = re.compile(r"[^A-Za-z0-9_]+")
 
+def extract_features(model, preprocess, image, device):
+    """Run ``image`` through ``model`` and return the L2-normalised feature vector.
 
-def derive_namespace(model, dim=None):
-    """Derive a stable, table-name-safe namespace from a torch.nn.Module.
-
-    Any change to architecture or output dimension flows through to a different
-    namespace, so switching backbones never silently reuses stale vectors.
-    ``str(model)`` produces a stable layer-dump that changes with architecture.
+    Free function so offline tools (fixture generation, batch jobs) can produce
+    vectors that match runtime exactly without instantiating ``ImageSearch``.
     """
-    if model is None:
-        return "default"
-
-    name = model.__class__.__name__.lower()
-    short = hashlib.sha1(str(model).encode("utf-8")).hexdigest()[:8]
-    raw = f"{name}_{dim or 'x'}_{short}"
-    return _NAMESPACE_SAFE.sub("_", raw).strip("_") or "default"
+    tensor = preprocess(image.convert("RGB")).unsqueeze(0).to(device)
+    with torch.no_grad():
+        feature = model(tensor)[0].cpu().numpy()
+    return feature / np.linalg.norm(feature)
 
 
 def vector_table_name(tablename, namespace, suffix="vectors"):
@@ -64,13 +56,21 @@ def rank_results(pks, dists, sorted=True, limit=None):
     """Sort/limit a (pks, dists) pair into the public results tuple shape."""
     if not pks:
         return ()
+    dists = np.asarray(dists)
+    n = len(dists)
+    take_top = limit is not None and limit < n
 
-    if sorted:
-        order = np.argsort(np.asarray(dists), kind="stable")
+    if take_top and sorted:
+        # Top-k via partial sort (O(N)), then stable-sort the k survivors.
+        top = np.argpartition(dists, limit)[:limit]
+        order = top[np.argsort(dists[top], kind="stable")]
+    elif take_top:
+        order = np.argpartition(dists, limit)[:limit]
+    elif sorted:
+        order = np.argsort(dists, kind="stable")
     else:
-        order = range(len(dists))
+        return tuple(zip(pks, dists.tolist()))
 
-    results = tuple((pks[i], float(dists[i])) for i in order)
-    if limit is not None:
-        results = results[:limit]
-    return results
+    out_pks = [pks[int(i)] for i in order]
+    out_dists = dists[order].tolist()
+    return tuple(zip(out_pks, out_dists))

@@ -84,10 +84,14 @@ line-length = 120
 src = ["flask_image_search", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E", "F", "W", "I", "C90", "SIM", "PERF", "PL", "RUF", "B", "UP", "C4", "RET", "PTH", "N", "TRY", "ARG"]
+ignore = ["PLC0415", "TRY003"]
 
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = "double"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
 
 # Run common dev tasks via `poe <task>` (e.g. `poe docs`).
 # Add or rename tasks here -- they're discoverable with `poe --help`.

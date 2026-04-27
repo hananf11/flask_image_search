@@ -163,7 +163,7 @@ class GenericBackend(VectorBackend):
         query = np.asarray(query_vector, dtype=np.float32)
 
         pks = []
-        dists = []
+        dist_chunks = []
         chunk = np.empty((self._CHUNK_SIZE, store.dim), dtype=np.float32)
 
         with store.image_search.db.engine.connect() as conn:
@@ -181,10 +181,12 @@ class GenericBackend(VectorBackend):
                 )
                 for i, (_, blob) in enumerate(rows):
                     buf[i] = np.frombuffer(blob, dtype=np.float32)
-                chunk_dists = np.linalg.norm(buf - query, axis=1)
                 pks.extend(r[0] for r in rows)
-                dists.extend(chunk_dists.tolist())
+                dist_chunks.append(np.linalg.norm(buf - query, axis=1))
 
+        if not pks:
+            return ()
+        dists = np.concatenate(dist_chunks)
         return rank_results(pks, dists, sorted=sorted, limit=limit)
 
     def distance_expr(self, model, query_vector, column, limit=None):
@@ -230,9 +232,12 @@ class SqliteVecBackend(VectorBackend):
     @staticmethod
     def available():
         """Return True if sqlite-vec can be loaded on this Python build."""
-        import sqlite3
+        try:
+            import sqlite3
 
-        import sqlite_vec
+            import sqlite_vec
+        except ImportError:
+            return False
 
         con = sqlite3.connect(":memory:")
         if not hasattr(con, "enable_load_extension"):
@@ -267,7 +272,9 @@ class SqliteVecBackend(VectorBackend):
 
         self._stores[tablename] = SimpleNamespace(
             dim=dim,
-            vec_tablename=vector_table_name(tablename, image_search.namespace, suffix="vec"),
+            vec_tablename=vector_table_name(
+                tablename, image_search.namespace, suffix="vec"
+            ),
             image_search=image_search,
             pk_type=pk_type,
             created=False,
@@ -293,9 +300,7 @@ class SqliteVecBackend(VectorBackend):
     def _serialize(self, vector):
         import sqlite_vec
 
-        return sqlite_vec.serialize_float32(
-            np.asarray(vector, dtype=np.float32).tolist()
-        )
+        return sqlite_vec.serialize_float32(np.asarray(vector, dtype=np.float32))
 
     def upsert(self, connection, model, pk, vector):
         store = self.get_store(model)
@@ -392,6 +397,15 @@ class PgVectorBackend(VectorBackend):
 
     def __init__(self):
         self._stores = {}
+
+    @staticmethod
+    def available():
+        """Return True if pgvector's SQLAlchemy bindings are importable."""
+        try:
+            from pgvector.sqlalchemy import Vector  # noqa: F401
+        except ImportError:
+            return False
+        return True
 
     def register(self, image_search, model, dim):
         from pgvector.sqlalchemy import Vector
@@ -490,18 +504,8 @@ class PgVectorBackend(VectorBackend):
 def auto_backend(dialect_name):
     """Pick the best available backend for ``dialect_name``."""
     if dialect_name == "sqlite":
-        try:
-            import sqlite_vec  # noqa: F401
-
-            if SqliteVecBackend.available():
-                return SqliteVecBackend()
-        except ImportError:
-            pass
-    elif dialect_name == "postgresql":
-        try:
-            from pgvector.sqlalchemy import Vector  # noqa: F401
-
-            return PgVectorBackend()
-        except ImportError:
-            pass
+        if SqliteVecBackend.available():
+            return SqliteVecBackend()
+    elif dialect_name == "postgresql" and PgVectorBackend.available():
+        return PgVectorBackend()
     return GenericBackend()

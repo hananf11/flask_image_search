@@ -1,6 +1,8 @@
+# ruff: noqa: N802, N803
+
 import logging
-import os
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -17,8 +19,8 @@ handler.setFormatter(logging.Formatter("%(asctime)s Testing: %(message)s"))
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-BASE_PATH = os.path.dirname(os.path.realpath(__file__))
-IMAGE = os.path.join(BASE_PATH, "./test.jpg")
+BASE_PATH = Path(__file__).resolve().parent
+IMAGE = str(BASE_PATH / "test.jpg")
 
 # ------------------------------------------------------------------ #
 # Load all three backbones once at session start so tests don't pay
@@ -32,8 +34,6 @@ _device = torch.device("cpu")
 def _load_vgg16():
     m = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.DEFAULT)
     m.classifier = m.classifier[:1]
-    for p in m.parameters():
-        p.grad = None
     m.to(_device)
     m.train(False)
     return m
@@ -42,8 +42,6 @@ def _load_vgg16():
 def _load_vgg19():
     m = torchvision.models.vgg19(weights=torchvision.models.VGG19_Weights.DEFAULT)
     m.classifier = m.classifier[:1]
-    for p in m.parameters():
-        p.grad = None
     m.to(_device)
     m.train(False)
     return m
@@ -53,8 +51,6 @@ def _load_inception_v3():
     m = torchvision.models.inception_v3(weights=torchvision.models.Inception_V3_Weights.DEFAULT)
     m.fc = nn.Identity()
     m.aux_logits = False
-    for p in m.parameters():
-        p.grad = None
     m.to(_device)
     m.train(False)
     return m
@@ -70,33 +66,33 @@ _inception_v3_model = _load_inception_v3()
 # ------------------------------------------------------------------ #
 
 class ImageSearchVGG16(ImageSearch):
+    feature_size = 4096
+    namespace = "vgg16-fc1"
+
     def get_model(self):
         self.device = _device
         return _vgg16_model
 
-    def get_feature_size(self):
-        return 4096
-
 
 class ImageSearchVGG19(ImageSearch):
+    feature_size = 4096
+    namespace = "vgg19-fc1"
+
     def get_model(self):
         self.device = _device
         return _vgg19_model
-
-    def get_feature_size(self):
-        return 4096
 
     def get_preprocess(self):
         return torchvision.models.VGG19_Weights.DEFAULT.transforms()
 
 
 class ImageSearchInceptionV3(ImageSearch):
+    feature_size = 2048
+    namespace = "inception_v3-pool"
+
     def get_model(self):
         self.device = _device
         return _inception_v3_model
-
-    def get_feature_size(self):
-        return 2048
 
     def get_preprocess(self):
         return torchvision.models.Inception_V3_Weights.DEFAULT.transforms()
@@ -116,9 +112,9 @@ def app():
 @pytest.fixture(ids=["test.db"])
 def db(app, tmp_path):
     """Copy committed test.db to tmp_path so vector tables never dirty the fixture."""
-    src = os.path.join(BASE_PATH, "test.db")
+    src = BASE_PATH / "test.db"
     dst = tmp_path / "test.db"
-    shutil.copy(src, str(dst))
+    shutil.copy(str(src), str(dst))
     app.config.update({
         "SQLALCHEMY_DATABASE_URI": f"sqlite:///{dst}",
         "SQLALCHEMY_TRACK_MODIFICATIONS": False
@@ -159,8 +155,8 @@ def _load_fixture_vectors(image_search, Image):
     Falls back to live inference (slow) if the fixture file is missing so that
     tests still work before generate_fixtures.py has been run.
     """
-    fixture_path = os.path.join(BASE_PATH, "fixtures", f"{image_search.namespace}.npz")
-    if not os.path.exists(fixture_path):
+    fixture_path = BASE_PATH / "fixtures" / f"{image_search.namespace}.npz"
+    if not fixture_path.exists():
         import warnings
         warnings.warn(
             f"Fixture file {fixture_path} not found; falling back to live inference. "

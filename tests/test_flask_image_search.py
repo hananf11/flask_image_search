@@ -2,6 +2,7 @@
 
 import logging
 import os
+from pathlib import Path
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # noqa
 
@@ -14,8 +15,8 @@ handler.setFormatter(logging.Formatter("%(asctime)s Testing: %(message)s"))
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-BASE_PATH = os.path.dirname(os.path.realpath(__file__))
-IMAGE = os.path.join(BASE_PATH, "./test.jpg")
+BASE_PATH = Path(__file__).resolve().parent
+IMAGE = str(BASE_PATH / "test.jpg")
 
 
 @pytest.mark.filterwarnings("ignore::DeprecationWarning:tensorflow")
