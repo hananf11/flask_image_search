@@ -3,8 +3,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from flask_image_search import __about__  # noqa: E402
-from pallets_sphinx_themes import ProjectLink  # noqa: E402
+from flask_image_search import __about__
+from pallets_sphinx_themes import ProjectLink
 
 # -- Project information -----------------------------------------------------
 
