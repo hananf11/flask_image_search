@@ -233,7 +233,8 @@ class ImageSearch:
     def delete_index(self, entry, connection=None):
         if connection is None:
             with self.db.engine.begin() as conn:
-                return self.delete_index(entry, connection=conn)
+                self.delete_index(entry, connection=conn)
+            return
         model = type(entry)
         pk = getattr(entry, self.models[entry.__tablename__].id)
         self.backend.delete(connection, model, pk)

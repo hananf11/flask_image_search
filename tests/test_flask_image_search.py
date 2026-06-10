@@ -4,7 +4,7 @@ import logging
 import os
 from pathlib import Path
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # noqa
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 import pytest
 from sqlalchemy.sql.expression import func

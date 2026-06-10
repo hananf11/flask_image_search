@@ -87,6 +87,11 @@ src = ["flask_image_search", "tests"]
 select = ["E", "F", "W", "I", "C90", "SIM", "PERF", "PL", "RUF", "B", "UP", "C4", "RET", "PTH", "N", "TRY", "ARG"]
 ignore = ["PLC0415", "TRY003"]
 
+[tool.ruff.lint.per-file-ignores]
+# Test params named after SQLAlchemy model classes (Image, Radio) are intentionally
+# PascalCase; assertions legitimately compare against literals.
+"tests/*" = ["N803", "PLR2004"]
+
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = "double"
 

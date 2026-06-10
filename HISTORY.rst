@@ -16,7 +16,7 @@ Breaking changes
   ``feature_extract()`` if needed.
 * ``self.keras_model`` renamed to ``self.model``.
 * ``init_app(tensorflow=False)`` renamed to ``init_app(load_model=False)``.
-* Minimum Python version is now **3.8**.
+* Minimum Python version is now **3.9**.
 
 New features
 ~~~~~~~~~~~~

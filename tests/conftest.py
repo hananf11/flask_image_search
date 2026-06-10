@@ -1,4 +1,4 @@
-# ruff: noqa: N802, N803
+# ruff: noqa: N802
 
 import logging
 import shutil

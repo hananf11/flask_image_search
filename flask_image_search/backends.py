@@ -64,7 +64,7 @@ class VectorBackend:
     def count_indexed(self, model):
         raise NotImplementedError
 
-    def is_indexed(self, connection, model, pk):
+    def is_indexed(self, connection, model, pk):  # noqa: ARG002
         """Return True if pk already has a vector stored.
 
         Used by ImageSearch to skip re-indexing when replace=False. Backends
@@ -245,9 +245,10 @@ class SqliteVecBackend(VectorBackend):
         try:
             con.enable_load_extension(True)
             sqlite_vec.load(con)
-            return True
         except Exception:
             return False
+        else:
+            return True
         finally:
             con.close()
 
