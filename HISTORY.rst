@@ -29,6 +29,10 @@ New features
 * ``IMAGE_SEARCH_NAMESPACE`` config key overrides the auto-derived namespace.
 * Namespace is now derived from the model architecture hash so swapping
   backbones never silently reuses stale vectors.
+* Broad framework support: works on Flask 2.0+ / Flask-SQLAlchemy 2.5+ /
+  SQLAlchemy 1.4+ as well as the Flask 3 line, so it drops into legacy apps
+  without forcing a framework upgrade. CI tests both the minimum and the
+  current dependency stacks.
 * Automated releases via ``bump-my-version`` and PyPI trusted publishing (no
   stored credentials needed).
 
