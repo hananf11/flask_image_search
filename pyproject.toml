@@ -25,7 +25,7 @@ classifiers = [
 ]
 dependencies = [
     "flask>=2.0",
-    "Flask-SQLAlchemy>=3.0",
+    "Flask-SQLAlchemy>=2.5",
     "SQLAlchemy>=1.4",
     "pillow>=8.2",
     "numpy>=1.21",

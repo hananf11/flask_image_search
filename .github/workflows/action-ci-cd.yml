@@ -13,8 +13,13 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        # "latest" resolves the current dependency stack (Flask 3 line);
+        # "min" pins the floor we advertise (Flask 2 / Flask-SQLAlchemy 2.5 /
+        # SQLAlchemy 1.4 / Werkzeug 2) so the package keeps dropping into legacy
+        # Flask 2 apps like NZVR without forcing a framework upgrade.
+        deps: ["latest", "min"]
 
-    name: Test (Python ${{ matrix.python-version }})
+    name: Test (Python ${{ matrix.python-version }}, ${{ matrix.deps }} deps)
 
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +33,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: python${{ matrix.python-version }}-pip-${{ hashFiles('pyproject.toml') }}
+          key: python${{ matrix.python-version }}-${{ matrix.deps }}-pip-${{ hashFiles('pyproject.toml') }}
 
       - name: Upgrade pip (PEP 735 dependency-groups need pip >= 25.1)
         run: python -m pip install --upgrade "pip>=25.1"
@@ -36,10 +41,20 @@ jobs:
       - name: Install PyTorch (CPU-only)
         run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-      - name: Install package and dev deps
+      - name: Pin minimum supported dependency stack
+        if: matrix.deps == 'min'
+        run: pip install "Flask<3" "Flask-SQLAlchemy<3" "Werkzeug<3" "SQLAlchemy<2"
+
+      - name: Install package (min deps -- keep the pinned floor)
+        if: matrix.deps == 'min'
+        run: pip install -e . --no-deps && pip install pytest
+
+      - name: Install package and dev deps (latest)
+        if: matrix.deps == 'latest'
         run: pip install -e . --group dev
 
       - name: Lint with ruff
+        if: matrix.deps == 'latest'
         run: ruff check
 
       - name: Test with pytest
