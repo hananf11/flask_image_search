@@ -186,6 +186,12 @@ class ImageSearch:
             return True
 
         image_path = getattr(entry, data.path)
+        if not image_path:
+            logger.warning(
+                "Skipping %s pk=%s: %r is empty/None",
+                entry.__tablename__, pk, data.path,
+            )
+            return False
         image = Image.open(Path(self.root) / image_path)
         features = self.feature_extract(image)
 
