@@ -40,6 +40,29 @@ def test_index_image(Image, image_search):
     assert image_search.count_indexed(Image) == before
 
 
+@pytest.mark.parametrize(
+    "image_search",
+    ["default", "vgg16", "vgg19", "inception_v3"],
+    ids=["default", "vgg16", "vgg19", "inception_v3"],
+    indirect=["image_search"],
+)
+def test_feature_extract_batch_matches_single(image_search):
+    """Batched extraction must produce the same vectors as the single-image
+    path (within float tolerance) for every backbone."""
+    import numpy as np
+    from PIL import Image as PILImage
+
+    base = PILImage.open(IMAGE)
+    images = [base, base.rotate(90), base.transpose(PILImage.FLIP_LEFT_RIGHT)]
+
+    batched = image_search.feature_extract_batch(images)
+    single = [image_search.feature_extract(img) for img in images]
+
+    assert len(batched) == len(images)
+    for b, s in zip(batched, single):
+        assert np.allclose(b, s, atol=1e-5)
+
+
 @pytest.mark.parametrize("image_search", ["default"], indirect=["image_search"])
 def test_index_skips_empty_path(Image, image_search):
     """A None/empty image path is skipped, not raised -- one bad row must not

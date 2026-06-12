@@ -24,6 +24,22 @@ def extract_features(model, preprocess, image, device):
     return feature / np.linalg.norm(feature)
 
 
+def extract_features_batch(model, preprocess, images, device):
+    """Run a list of PIL images through ``model`` in a single forward pass.
+
+    Returns a list of L2-normalised feature vectors, one per input image, in
+    order. A single batched forward amortises Python/dispatch overhead and lets
+    BLAS use larger matmuls -- on CPU this is several times faster than calling
+    ``extract_features`` per image, and far more on GPU. The per-vector result
+    is identical (within float tolerance) to the single-image path.
+    """
+    tensor = torch.stack([preprocess(image.convert("RGB")) for image in images]).to(device)
+    with torch.no_grad():
+        features = model(tensor).cpu().numpy()
+    norms = np.linalg.norm(features, axis=1, keepdims=True)
+    return list(features / norms)
+
+
 def vector_table_name(tablename, namespace, suffix="vectors"):
     """Build the per-namespace sibling-table name used by every backend."""
     return f"{tablename}_{suffix}__{namespace}"
