@@ -40,6 +40,19 @@ def test_index_image(Image, image_search):
     assert image_search.count_indexed(Image) == before
 
 
+@pytest.mark.parametrize("image_search", ["default"], indirect=["image_search"])
+def test_index_skips_empty_path(Image, image_search):
+    """A None/empty image path is skipped, not raised -- one bad row must not
+    abort index_model for the whole corpus."""
+    before = image_search.count_indexed(Image)
+
+    entry = Image.query.first()
+    entry.path = None  # simulate an orphan row with no resolvable image path
+
+    assert image_search.index(entry, replace=True) is False
+    assert image_search.count_indexed(Image) == before
+
+
 @pytest.mark.parametrize(
     "image_search, expected",
     [
