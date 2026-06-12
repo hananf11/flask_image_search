@@ -18,7 +18,7 @@ from flask_image_search.__about__ import (
     __version__,
 )
 from flask_image_search.backends import auto_backend
-from flask_image_search.helper import extract_features
+from flask_image_search.helper import extract_features, extract_features_batch
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +141,24 @@ class ImageSearch:
             return np.random.rand(self.feature_size)
         return extract_features(self.model, self.preprocess, image, self.device)
 
+    def feature_extract_batch(self, images):
+        """Extract L2-normalised vectors for a list of PIL images in one pass.
+
+        Used by ``index_model`` to amortise inference over many images. The
+        default runs a single batched forward through ``self.model`` -- several
+        times faster than per-image extraction on CPU, far more on GPU.
+
+        If a subclass overrides ``feature_extract`` (a fully custom single-image
+        pipeline) but not this method, falls back to calling ``feature_extract``
+        per image so custom behaviour is never silently bypassed. Override this
+        method too to batch a custom pipeline.
+        """
+        if self.model is None:
+            return [np.random.rand(self.feature_size) for _ in images]
+        if type(self).feature_extract is ImageSearch.feature_extract:
+            return extract_features_batch(self.model, self.preprocess, images, self.device)
+        return [self.feature_extract(image) for image in images]
+
     def register(self, id="id", path="path", ignore="ignore"):
         def inner(model):
             dim = self.feature_size
@@ -198,33 +216,65 @@ class ImageSearch:
         self.backend.upsert(connection, model, pk, features)
         return True
 
-    # Commit every N entries during index_model. Small enough to keep the SQLite
-    # write lock window brief (letting readers interleave), large enough to
-    # amortise transaction overhead over many inserts.
-    _INDEX_BATCH_SIZE = 50
+    def _iter_indexable(self, model, entries, read_conn, replace):
+        """Yield ``(pk, loaded PIL image)`` for each entry that should be indexed.
 
-    def index_model(self, model, replace=False, threaded=True):
+        Applies the same per-entry guards as ``index``: skip ignored rows,
+        already-indexed rows (unless ``replace``), empty paths, and images that
+        fail to open -- so one bad row never aborts an ``index_model`` run.
+        """
+        data = self.models[model.__tablename__]
+        for entry in entries:
+            if data.ignore and getattr(entry, data.ignore):
+                continue
+            pk = getattr(entry, data.id)
+            if not replace and self.backend.is_indexed(read_conn, model, pk):
+                continue
+            image_path = getattr(entry, data.path)
+            if not image_path:
+                logger.warning(
+                    "Skipping %s pk=%s: %r is empty/None",
+                    model.__tablename__, pk, data.path,
+                )
+                continue
+            try:
+                image = Image.open(Path(self.root) / image_path)
+                image.load()
+            except Exception as exc:
+                logger.warning(
+                    "Skipping %s pk=%s: cannot open %s (%s)",
+                    model.__tablename__, pk, image_path, exc,
+                )
+                continue
+            yield pk, image
+
+    def index_model(self, model, replace=False, threaded=True, batch_size=16):
+        # batch_size controls both inference batching (one forward per batch)
+        # and the SQLite write-lock window (one transaction per batch). 16 is
+        # near the CPU throughput plateau while keeping each commit brief.
         def run():
             with self.app.app_context():
                 entries = self.db.session.query(model).options(lazyload("*")).all()
                 total = len(entries)
                 indexed = 0
-                batch = []
+                pending = []  # (pk, PIL image) awaiting a batched forward pass
 
                 def flush():
                     nonlocal indexed
-                    if not batch:
+                    if not pending:
                         return
+                    vectors = self.feature_extract_batch([img for _, img in pending])
                     with self.db.engine.begin() as conn:
-                        for entry in batch:
-                            if self.index(entry, replace=replace, connection=conn):
-                                indexed += 1
-                    batch.clear()
+                        for (pk, _), vector in zip(pending, vectors):
+                            self.backend.upsert(conn, model, pk, vector)
+                            indexed += 1
+                    pending.clear()
 
-                for entry in entries:
-                    batch.append(entry)
-                    if len(batch) >= self._INDEX_BATCH_SIZE:
-                        flush()
+                with self.db.engine.connect() as read_conn:
+                    for pk, image in self._iter_indexable(model, entries, read_conn, replace):
+                        pending.append((pk, image))
+                        if len(pending) >= batch_size:
+                            flush()
                 flush()
 
                 logger.info(
