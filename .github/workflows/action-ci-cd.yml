@@ -72,17 +72,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-
-      - name: Install build
-        run: pip install build
-
-      - name: Build
-        run: python -m build
+          fetch-depth: 0   # full history so the main-ancestry guard below can run
 
       # PEP 440 prerelease tags (v2.0.0rc1 / v2.0.0b1 / v2.0.0a1 / v2.0.0.dev1).
       # PyPI/pip already treat the version string itself as a prerelease, so
@@ -95,6 +86,30 @@ jobs:
           else
             echo "value=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # Final (non-prerelease) versions must ship from main. Git tags aren't
+      # tied to a branch, so verify the tagged commit is reachable from
+      # origin/main -- an accidental vX.Y.Z tag on a feature branch fails here
+      # instead of publishing. Prereleases may ship from any branch (rc testing).
+      - name: Require final releases on main
+        if: steps.prerelease.outputs.value == 'false'
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Final release tag ${GITHUB_REF_NAME} is not on main; refusing to publish."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build
+        run: pip install build
+
+      - name: Build
+        run: python -m build
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
