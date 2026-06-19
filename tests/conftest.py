@@ -123,7 +123,10 @@ def db(app, tmp_path):
     yield db
 
 
-@pytest.fixture(params=["vgg16", "vgg19", "inception_v3"])
+# Driven entirely by each test's indirect @pytest.mark.parametrize("image_search", ...).
+# No fixture-level `params=`: newer pytest errors with "duplicate parametrization"
+# when a fixture is parametrized both here and indirectly at the test.
+@pytest.fixture
 def image_search(app, request):
     app.config.update({"IMAGE_SEARCH_PATH": "image_search/" + request.param})
     request.getfixturevalue("db")
