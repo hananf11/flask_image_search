@@ -84,6 +84,18 @@ jobs:
       - name: Build
         run: python -m build
 
+      # PEP 440 prerelease tags (v2.0.0rc1 / v2.0.0b1 / v2.0.0a1 / v2.0.0.dev1).
+      # PyPI/pip already treat the version string itself as a prerelease, so
+      # plain `pip install` ignores it; this only labels the GitHub Release.
+      - name: Determine if prerelease
+        id: prerelease
+        run: |
+          if [[ "${GITHUB_REF_NAME}" =~ (a|b|rc)[0-9]+$ || "${GITHUB_REF_NAME}" =~ \.dev[0-9]+$ ]]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
 
@@ -91,3 +103,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          prerelease: ${{ steps.prerelease.outputs.value }}
