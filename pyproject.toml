@@ -56,6 +56,8 @@ docs = [
 [dependency-groups]
 dev = [
     "pytest",
+    "pytest-xdist",
+    "pytest-cov",
     "coverage",
     "ruff",
     "bump-my-version",
@@ -106,8 +108,7 @@ max-complexity = 10
 # Add or rename tasks here -- they're discoverable with `poe --help`.
 [tool.poe.tasks]
 test = {cmd = "pytest", help = "Run the test suite"}
-coverage = {cmd = "coverage run -m pytest", help = "Run the suite under coverage (then `poe coverage-report`)"}
-coverage-report = {cmd = "coverage report", help = "Print the coverage report (fails under the configured floor)"}
+coverage = {cmd = "pytest --cov=flask_image_search -n auto", help = "Run the suite in parallel under coverage"}
 lint = {cmd = "ruff check", help = "Check lint"}
 fix = {cmd = "ruff check --fix", help = "Auto-fix lint issues"}
 docs = {cmd = "sphinx-autobuild docs docs/_build/html --open-browser", help = "Live-reload docs server"}
@@ -118,11 +119,14 @@ fixtures = {cmd = "python tests/generate_fixtures.py", help = "Regenerate test f
 [tool.coverage.run]
 source = ["flask_image_search"]
 branch = true
+# Store paths relative to the repo root so coverage data produced in separate
+# CI jobs (different absolute checkout paths) combines cleanly in the gate job.
+relative_files = true
 
 [tool.coverage.report]
 show_missing = true
-# Floor, not a target -- ratchet up as coverage improves. Measured in the
-# backends CI job, which runs the full suite with all three vector backends
-# (sqlite-vec + pgvector installed, Postgres service) so the number reflects
-# real backend coverage, not just the GenericBackend fallback.
+# Floor, not a target -- ratchet up as coverage improves. Enforced in the
+# `coverage` gate job, which combines data from the backends job (all three
+# vector backends) and the coverage-suite job (full model suite on sqlite) so
+# the number reflects real coverage across both.
 fail_under = 80

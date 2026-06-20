@@ -60,16 +60,15 @@ jobs:
       - name: Test with pytest
         run: pytest
 
-  # Runs the FULL suite at one Python version with all three vector backends
-  # available (sqlite-vec + pgvector installed, Postgres service) -- so it
-  # doubles as the coverage gate: the number reflects real backend coverage, not
-  # just the GenericBackend fallback the cross-version matrix sees. We don't fan
-  # this across the matrix -- backend behaviour is dialect/extension dependent,
-  # not interpreter dependent. FIS_REQUIRE_BACKENDS makes a backend that can't
-  # load fail the run instead of silently skipping.
+  # All three vector backends, one Python version -- backend behaviour is
+  # dialect/extension dependent, not interpreter dependent. These tests use
+  # load_model=False (no CNN), so the job is fast: no torch weights, no
+  # inference. FIS_REQUIRE_BACKENDS makes a backend that can't load fail the run
+  # instead of silently skipping. Emits coverage for the backend code paths
+  # (incl. sqlite-vec + pgvector) for the combined gate below.
   backends:
     runs-on: ubuntu-latest
-    name: Full suite + coverage (all backends)
+    name: Vector backends (all three)
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -101,10 +100,55 @@ jobs:
           path: ~/.cache/pip
           key: backends-pip-${{ hashFiles('pyproject.toml') }}
 
-      # Pretrained backbone weights (~1 GB across vgg16/vgg19/inception_v3) are
-      # downloaded on first inference. Cache torch hub so the full-suite run
-      # doesn't re-fetch them every time. Keyed on conftest.py, which defines
-      # the backbones -- changing the model set invalidates the cache.
+      - name: Upgrade pip (PEP 735 dependency-groups need pip >= 25.1)
+        run: python -m pip install --upgrade "pip>=25.1"
+
+      # The package imports torch at module load, so it's needed even though
+      # these tests never run a model. CPU wheel keeps it small.
+      - name: Install PyTorch (CPU-only)
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      # [sqlite] -> sqlite-vec, [postgres] -> pgvector; psycopg is the driver
+      # for the FIS_TEST_POSTGRES_URI above.
+      - name: Install package with both backend extras
+        run: pip install -e ".[sqlite,postgres]" --group dev "psycopg[binary]"
+
+      - name: Run backend tests under coverage
+        env:
+          COVERAGE_FILE: cov-backends.dat
+        run: pytest tests/test_backends.py -v --cov=flask_image_search --cov-report= --cov-fail-under=0
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: cov-backends
+          path: cov-backends.dat
+
+  # Full model suite (all backbones) on sqlite/GenericBackend, run in parallel
+  # with pytest-xdist (-n auto) so the CNN inference across the four param sets
+  # spreads over the runner's cores instead of running serially. Emits coverage
+  # for everything except the sqlite-vec/pgvector paths (those come from the
+  # backends job above; the gate combines them).
+  coverage-suite:
+    runs-on: ubuntu-latest
+    name: Coverage - full suite (sqlite)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: coverage-suite-pip-${{ hashFiles('pyproject.toml') }}
+
+      # Backbone weights (~1 GB across vgg16/vgg19/inception_v3) download on
+      # first inference. Cache torch hub so re-runs skip the fetch. Keyed on
+      # conftest.py, which defines the backbones.
       - name: Cache torch model weights
         uses: actions/cache@v4
         with:
@@ -117,16 +161,48 @@ jobs:
       - name: Install PyTorch (CPU-only)
         run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-      # [sqlite] -> sqlite-vec, [postgres] -> pgvector; psycopg is the driver
-      # for the FIS_TEST_POSTGRES_URI above.
-      - name: Install package with both backend extras
-        run: pip install -e ".[sqlite,postgres]" --group dev "psycopg[binary]"
+      - name: Install package and dev deps
+        run: pip install -e . --group dev
 
-      - name: Run full suite under coverage
-        run: coverage run -m pytest -v
+      - name: Run full suite under coverage (parallel)
+        env:
+          COVERAGE_FILE: cov-suite.dat
+        run: pytest --cov=flask_image_search --cov-report= --cov-fail-under=0 -n auto
 
-      - name: Coverage report (fails under the floor in pyproject)
-        run: coverage report
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: cov-suite
+          path: cov-suite.dat
+
+  # Combines coverage from the backends job (all three vector backends) and the
+  # coverage-suite job (full model suite) and enforces the fail_under floor in
+  # pyproject.toml against the union -- so neither job needs to run everything.
+  coverage:
+    runs-on: ubuntu-latest
+    name: Coverage gate
+    needs: [backends, coverage-suite]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install coverage
+        run: pip install coverage
+
+      - name: Download coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cov-*
+          merge-multiple: true
+
+      - name: Combine and report (fails under the floor in pyproject)
+        run: |
+          coverage combine cov-suite.dat cov-backends.dat
+          coverage report
 
   docs:
     runs-on: ubuntu-latest
@@ -165,7 +241,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     name: Publish to PyPI
-    needs: [test, backends, docs]
+    needs: [test, backends, coverage, docs]
     if: startsWith(github.ref, 'refs/tags/v')
     environment: pypi
     permissions:
