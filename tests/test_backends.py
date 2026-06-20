@@ -150,9 +150,11 @@ def test_upsert_replaces_in_place(backend_case):
     image_search, Item = backend_case
     _seed(image_search, Item)
 
-    # move pk3 far away; it must drop to last without changing the row count
+    # move pk3 to the opposite of the query (distance 2.0) so it is strictly
+    # farther than pk2 (distance sqrt(2)) -- no equidistant tie for backends to
+    # break differently -- and must drop to last without changing the row count
     with image_search.db.engine.begin() as conn:
-        image_search.backend.upsert(conn, Item, 3, np.asarray([0.0, 0.0, 1.0, 0.0], dtype=np.float32))
+        image_search.backend.upsert(conn, Item, 3, np.asarray([-1.0, 0.0, 0.0, 0.0], dtype=np.float32))
 
     assert image_search.count_indexed(Item) == len(VECTORS)
     results = image_search.backend.search(Item, QUERY, limit=3)
