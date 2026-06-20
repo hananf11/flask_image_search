@@ -1,10 +1,7 @@
 """Tests for `flask_image_search` package."""
 
 import logging
-import os
 from pathlib import Path
-
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 import pytest
 from sqlalchemy.sql.expression import func
@@ -19,7 +16,6 @@ BASE_PATH = Path(__file__).resolve().parent
 IMAGE = str(BASE_PATH / "test.jpg")
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning:tensorflow")
 @pytest.mark.parametrize(
     "image_search",
     ["default", "vgg16", "vgg19", "inception_v3"],

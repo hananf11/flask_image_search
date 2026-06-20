@@ -24,6 +24,9 @@ build:
 
 python:
     install:
-        - requirements: docs/requirements.txt
+        # Docs deps live in the [docs] extra in pyproject.toml (single source of
+        # truth, shared with the CI docs job) -- not a separate requirements file.
         - method: pip
           path: .
+          extra_requirements:
+              - docs

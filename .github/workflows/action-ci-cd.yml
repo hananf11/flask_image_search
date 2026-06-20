@@ -60,13 +60,16 @@ jobs:
       - name: Test with pytest
         run: pytest
 
-  # Exercises all three vector backends in one job. We don't fan this across
-  # the Python matrix -- backend behaviour is dialect/extension dependent, not
-  # interpreter dependent. FIS_REQUIRE_BACKENDS makes a backend that can't load
-  # fail the run instead of silently skipping.
+  # Runs the FULL suite at one Python version with all three vector backends
+  # available (sqlite-vec + pgvector installed, Postgres service) -- so it
+  # doubles as the coverage gate: the number reflects real backend coverage, not
+  # just the GenericBackend fallback the cross-version matrix sees. We don't fan
+  # this across the matrix -- backend behaviour is dialect/extension dependent,
+  # not interpreter dependent. FIS_REQUIRE_BACKENDS makes a backend that can't
+  # load fail the run instead of silently skipping.
   backends:
     runs-on: ubuntu-latest
-    name: Vector backends (all three)
+    name: Full suite + coverage (all backends)
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -109,8 +112,11 @@ jobs:
       - name: Install package with both backend extras
         run: pip install -e ".[sqlite,postgres]" --group dev "psycopg[binary]"
 
-      - name: Test all backends
-        run: pytest tests/test_backends.py -v
+      - name: Run full suite under coverage
+        run: coverage run -m pytest -v
+
+      - name: Coverage report (fails under the floor in pyproject)
+        run: coverage report
 
   docs:
     runs-on: ubuntu-latest
@@ -138,7 +144,7 @@ jobs:
         run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install package and docs deps
-        run: pip install -e . --group docs
+        run: pip install -e ".[docs]"
 
       # -W turns warnings (broken cross-refs, missing autodoc targets, bad
       # directives) into failures; --keep-going reports every one in a single run

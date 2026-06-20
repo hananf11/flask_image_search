@@ -1,4 +1,0 @@
-Sphinx>=7,<9
-Pallets-Sphinx-Themes>=2.1
-sphinx-autobuild>=2024.0
-sphinxcontrib-log-cabinet>=1.0

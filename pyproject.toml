@@ -41,6 +41,15 @@ Documentation = "https://flask-image-search.readthedocs.io"
 [project.optional-dependencies]
 sqlite = ["sqlite-vec"]
 postgres = ["pgvector"]
+# Single source of truth for documentation dependencies. Installed by Read the
+# Docs (extra_requirements in .readthedocs.yml), the CI docs job, and the dev
+# group below -- so the docs build can never pass in one place and fail another.
+docs = [
+    "Sphinx>=7,<9",
+    "Pallets-Sphinx-Themes>=2.1",
+    "sphinx-autobuild>=2024.0",
+    "sphinxcontrib-log-cabinet>=1.0",
+]
 
 # Tooling for working on the package itself. Not shipped in the wheel.
 # Requires pip >= 25.1 (or uv, hatch, pdm) to install with `pip install --group dev`.
@@ -52,13 +61,8 @@ dev = [
     "bump-my-version",
     "pre-commit",
     "poethepoet",
-    {include-group = "docs"},
-]
-docs = [
-    "Sphinx>=6",
-    "Pallets-Sphinx-Themes>=2.0",
-    "sphinx-autobuild",
-    "sphinxcontrib-log-cabinet",
+    # Pull the docs deps from the [docs] extra so there's one list, not two.
+    "Flask-Image-Search[docs]",
 ]
 
 [tool.setuptools.dynamic]
@@ -102,9 +106,23 @@ max-complexity = 10
 # Add or rename tasks here -- they're discoverable with `poe --help`.
 [tool.poe.tasks]
 test = {cmd = "pytest", help = "Run the test suite"}
+coverage = {cmd = "coverage run -m pytest", help = "Run the suite under coverage (then `poe coverage-report`)"}
+coverage-report = {cmd = "coverage report", help = "Print the coverage report (fails under the configured floor)"}
 lint = {cmd = "ruff check", help = "Check lint"}
 fix = {cmd = "ruff check --fix", help = "Auto-fix lint issues"}
 docs = {cmd = "sphinx-autobuild docs docs/_build/html --open-browser", help = "Live-reload docs server"}
 docs-build = {cmd = "sphinx-build -b html docs docs/_build/html", help = "One-shot docs build"}
 example = {cmd = "python examples/example_app.py", help = "Run the demo Flask app"}
 fixtures = {cmd = "python tests/generate_fixtures.py", help = "Regenerate test feature vectors"}
+
+[tool.coverage.run]
+source = ["flask_image_search"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+# Floor, not a target -- ratchet up as coverage improves. Measured in the
+# backends CI job, which runs the full suite with all three vector backends
+# (sqlite-vec + pgvector installed, Postgres service) so the number reflects
+# real backend coverage, not just the GenericBackend fallback.
+fail_under = 70
