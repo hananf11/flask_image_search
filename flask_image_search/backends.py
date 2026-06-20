@@ -271,11 +271,17 @@ class SqliteVecBackend(VectorBackend):
         pk_col = getattr(model, pk_attr)
         pk_type = pk_col.property.columns[0].type.copy()
 
+        vec_tablename = vector_table_name(
+            tablename, image_search.namespace, suffix="vec"
+        )
         self._stores[tablename] = SimpleNamespace(
             dim=dim,
-            vec_tablename=vector_table_name(
-                tablename, image_search.namespace, suffix="vec"
-            ),
+            vec_tablename=vec_tablename,
+            # Quoted form for the raw-SQL paths below. The default namespace
+            # (e.g. "vgg16-fc1") contains a hyphen, so an unquoted identifier is
+            # a SQLite syntax error. The SQLAlchemy Table/sa_table paths quote
+            # automatically; the text() statements here must do it themselves.
+            vec_tablename_sql=f'"{vec_tablename}"',
             image_search=image_search,
             pk_type=pk_type,
             created=False,
@@ -292,7 +298,7 @@ class SqliteVecBackend(VectorBackend):
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    f"CREATE VIRTUAL TABLE IF NOT EXISTS {store.vec_tablename} "
+                    f"CREATE VIRTUAL TABLE IF NOT EXISTS {store.vec_tablename_sql} "
                     f"USING vec0(pk {pk_sql} PRIMARY KEY, embedding float[{store.dim}])"
                 )
             )
@@ -307,11 +313,11 @@ class SqliteVecBackend(VectorBackend):
         store = self.get_store(model)
         blob = self._serialize(vector)
         connection.execute(
-            text(f"DELETE FROM {store.vec_tablename} WHERE pk = :pk"), {"pk": pk}
+            text(f"DELETE FROM {store.vec_tablename_sql} WHERE pk = :pk"), {"pk": pk}
         )
         connection.execute(
             text(
-                f"INSERT INTO {store.vec_tablename}(pk, embedding) VALUES (:pk, :emb)"
+                f"INSERT INTO {store.vec_tablename_sql}(pk, embedding) VALUES (:pk, :emb)"
             ),
             {"pk": pk, "emb": blob},
         )
@@ -319,7 +325,7 @@ class SqliteVecBackend(VectorBackend):
     def delete(self, connection, model, pk):
         store = self.get_store(model)
         connection.execute(
-            text(f"DELETE FROM {store.vec_tablename} WHERE pk = :pk"), {"pk": pk}
+            text(f"DELETE FROM {store.vec_tablename_sql} WHERE pk = :pk"), {"pk": pk}
         )
 
     def search(self, model, query_vector, sorted=True, limit=None):
@@ -334,7 +340,7 @@ class SqliteVecBackend(VectorBackend):
                 # since sqrt is monotonic -- same ranking, cheaper sort.
                 rows = conn.execute(
                     text(
-                        f"SELECT pk, sqrt(distance) FROM {store.vec_tablename} "
+                        f"SELECT pk, sqrt(distance) FROM {store.vec_tablename_sql} "
                         f"WHERE embedding MATCH :q ORDER BY distance LIMIT :lim"
                     ),
                     {"q": blob, "lim": limit},
@@ -344,7 +350,7 @@ class SqliteVecBackend(VectorBackend):
                 rows = conn.execute(
                     text(
                         f"SELECT pk, vec_distance_L2(embedding, :q) AS distance "
-                        f"FROM {store.vec_tablename} {order_clause}"
+                        f"FROM {store.vec_tablename_sql} {order_clause}"
                     ),
                     {"q": blob},
                 ).fetchall()
@@ -381,7 +387,7 @@ class SqliteVecBackend(VectorBackend):
         store = self.get_store(model)
         with store.image_search.db.engine.connect() as conn:
             row = conn.execute(
-                text(f"SELECT COUNT(*) FROM {store.vec_tablename}")
+                text(f"SELECT COUNT(*) FROM {store.vec_tablename_sql}")
             ).fetchone()
         return row[0]
 
