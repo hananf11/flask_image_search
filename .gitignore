@@ -115,3 +115,6 @@ Pipfile.lock
 
 # pytest-monitor
 .pymon
+
+# git worktrees
+.worktrees/

@@ -1,95 +1,299 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
-
 name: CI/CD
 
 on:
   push:
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  test_and_lint:
-
+  test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.6, 3.7, 3.8]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        # "latest" resolves the current dependency stack (Flask 3 line);
+        # "min" pins the floor we advertise (Flask 2 / Flask-SQLAlchemy 2.5 /
+        # SQLAlchemy 1.4 / Werkzeug 2) so the package keeps dropping into legacy
+        # Flask 2 apps like NZVR without forcing a framework upgrade.
+        deps: ["latest", "min"]
 
-    name: Test and Lint (python ${{ matrix.python-version }})
+    name: Test (Python ${{ matrix.python-version }}, ${{ matrix.deps }} deps)
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Cache PIP
-      id: cache-pip
-      uses: actions/cache@v2
-      with:
-        path: ~/.cache/pip
-        key: python${{ matrix.python-version }}-pip-${{ hashFiles('./setup.cfg') }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install setuptools wheel flake8 pytest
-        python -m pip install .
-        if [ -f requirements_dev.txt ]; then pip install -r requirements_dev.txt; fi
-    - name: Lint with flake8
-      run: |
-        # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    - name: Test with pytest
-      run: |
-        pytest
+      - uses: actions/checkout@v4
 
-  deploy_check:
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: python${{ matrix.python-version }}-${{ matrix.deps }}-pip-${{ hashFiles('pyproject.toml') }}
+
+      - name: Upgrade pip (PEP 735 dependency-groups need pip >= 25.1)
+        run: python -m pip install --upgrade "pip>=25.1"
+
+      - name: Install PyTorch (CPU-only)
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Pin minimum supported dependency stack
+        if: matrix.deps == 'min'
+        run: pip install "Flask<3" "Flask-SQLAlchemy<3" "Werkzeug<3" "SQLAlchemy<2"
+
+      - name: Install package (min deps -- keep the pinned floor)
+        if: matrix.deps == 'min'
+        run: pip install -e . --no-deps && pip install pytest
+
+      - name: Install package and dev deps (latest)
+        if: matrix.deps == 'latest'
+        run: pip install -e . --group dev
+
+      - name: Lint with ruff
+        if: matrix.deps == 'latest'
+        run: ruff check
+
+      - name: Test with pytest
+        run: pytest
+
+  # All three vector backends, one Python version -- backend behaviour is
+  # dialect/extension dependent, not interpreter dependent. These tests use
+  # load_model=False (no CNN), so the job is fast: no torch weights, no
+  # inference. FIS_REQUIRE_BACKENDS makes a backend that can't load fail the run
+  # instead of silently skipping. Emits coverage for the backend code paths
+  # (incl. sqlite-vec + pgvector) for the combined gate below.
+  backends:
     runs-on: ubuntu-latest
-    name: Deploy Check
-    needs:
-    - test_and_lint
-    outputs:
-      valid: ${{ steps.check.outputs.valid }}
+    name: Vector backends (all three)
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fis_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      FIS_REQUIRE_BACKENDS: "1"
+      FIS_TEST_POSTGRES_URI: "postgresql+psycopg://postgres:postgres@localhost:5432/fis_test"
     steps:
-      - name: Check tag
-        id: check
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: backends-pip-${{ hashFiles('pyproject.toml') }}
+
+      - name: Upgrade pip (PEP 735 dependency-groups need pip >= 25.1)
+        run: python -m pip install --upgrade "pip>=25.1"
+
+      # The package imports torch at module load, so it's needed even though
+      # these tests never run a model. CPU wheel keeps it small.
+      - name: Install PyTorch (CPU-only)
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      # [sqlite] -> sqlite-vec, [postgres] -> pgvector; psycopg is the driver
+      # for the FIS_TEST_POSTGRES_URI above.
+      - name: Install package with both backend extras
+        run: pip install -e ".[sqlite,postgres]" --group dev "psycopg[binary]"
+
+      - name: Run backend tests under coverage
+        env:
+          COVERAGE_FILE: cov-backends.dat
+        run: pytest tests/test_backends.py -v --cov=flask_image_search --cov-report= --cov-fail-under=0
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: cov-backends
+          path: cov-backends.dat
+
+  # Full model suite (all backbones) on sqlite/GenericBackend, run in parallel
+  # with pytest-xdist (-n auto) so the CNN inference across the four param sets
+  # spreads over the runner's cores instead of running serially. Emits coverage
+  # for everything except the sqlite-vec/pgvector paths (those come from the
+  # backends job above; the gate combines them).
+  coverage-suite:
+    runs-on: ubuntu-latest
+    name: Coverage - full suite (sqlite)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: coverage-suite-pip-${{ hashFiles('pyproject.toml') }}
+
+      # Backbone weights (~1 GB across vgg16/vgg19/inception_v3) download on
+      # first inference. Cache torch hub so re-runs skip the fetch. Keyed on
+      # conftest.py, which defines the backbones.
+      - name: Cache torch model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/torch/hub/checkpoints
+          key: torch-weights-${{ hashFiles('tests/conftest.py') }}
+
+      - name: Upgrade pip (PEP 735 dependency-groups need pip >= 25.1)
+        run: python -m pip install --upgrade "pip>=25.1"
+
+      - name: Install PyTorch (CPU-only)
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install package and dev deps
+        run: pip install -e . --group dev
+
+      - name: Run full suite under coverage (parallel)
+        env:
+          COVERAGE_FILE: cov-suite.dat
+        run: pytest --cov=flask_image_search --cov-report= --cov-fail-under=0 -n auto
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: cov-suite
+          path: cov-suite.dat
+
+  # Combines coverage from the backends job (all three vector backends) and the
+  # coverage-suite job (full model suite) and enforces the fail_under floor in
+  # pyproject.toml against the union -- so neither job needs to run everything.
+  coverage:
+    runs-on: ubuntu-latest
+    name: Coverage gate
+    needs: [backends, coverage-suite]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install coverage
+        run: pip install coverage
+
+      - name: Download coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cov-*
+          merge-multiple: true
+
+      - name: Combine and report (fails under the floor in pyproject)
         run: |
-          if [[ ${{ github.ref }} =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9](\..+)?$ ]];
-          then echo "::set-output name=valid::true";
-          else echo "::set-output name=valid::false";
-          fi;
+          coverage combine cov-suite.dat cov-backends.dat
+          coverage report
 
-  deploy:
+  docs:
     runs-on: ubuntu-latest
-    name: Deploy
-    needs:
-    - test_and_lint
-    - deploy_check
-    if: needs.deploy_check.outputs.valid == 'true'
+    name: Build docs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: docs-pip-${{ hashFiles('pyproject.toml') }}
+
+      - name: Upgrade pip (PEP 735 dependency-groups need pip >= 25.1)
+        run: python -m pip install --upgrade "pip>=25.1"
+
+      # autodoc imports the package, which pulls in torch -- install the CPU
+      # wheel so the docs job doesn't drag down a multi-GB CUDA build.
+      - name: Install PyTorch (CPU-only)
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install package and docs deps
+        run: pip install -e ".[docs]"
+
+      # -W turns warnings (broken cross-refs, missing autodoc targets, bad
+      # directives) into failures; --keep-going reports every one in a single run
+      # instead of stopping at the first. This is what keeps Read the Docs green.
+      - name: Build docs
+        run: sphinx-build -b html -W --keep-going docs docs/_build/html
+
+  publish:
+    runs-on: ubuntu-latest
+    name: Publish to PyPI
+    needs: [test, backends, coverage, docs]
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC trusted publishing -- no stored credentials needed
+      contents: write   # creating the GitHub release
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: '3.x'
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install setuptools wheel twine
-    - name: Build
-      run: |
-        python setup.py sdist bdist_wheel
-    - name: Publish
-      run: |
-        twine upload dist/* -u ${{ secrets.PYPI_USERNAME }} -p ${{ secrets.PYPI_PASSWORD }}
-    - name: Release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: dist/*
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so the main-ancestry guard below can run
 
+      # PEP 440 prerelease tags (v2.0.0rc1 / v2.0.0b1 / v2.0.0a1 / v2.0.0.dev1).
+      # PyPI/pip already treat the version string itself as a prerelease, so
+      # plain `pip install` ignores it; this only labels the GitHub Release.
+      - name: Determine if prerelease
+        id: prerelease
+        run: |
+          if [[ "${GITHUB_REF_NAME}" =~ (a|b|rc)[0-9]+$ || "${GITHUB_REF_NAME}" =~ \.dev[0-9]+$ ]]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Final (non-prerelease) versions must ship from main. Git tags aren't
+      # tied to a branch, so verify the tagged commit is reachable from
+      # origin/main -- an accidental vX.Y.Z tag on a feature branch fails here
+      # instead of publishing. Prereleases may ship from any branch (rc testing).
+      - name: Require final releases on main
+        if: steps.prerelease.outputs.value == 'false'
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Final release tag ${GITHUB_REF_NAME} is not on main; refusing to publish."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build
+        run: pip install build
+
+      - name: Build
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          prerelease: ${{ steps.prerelease.outputs.value }}

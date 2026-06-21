@@ -34,22 +34,24 @@ Alternatively you if you're using a `factory`_::
 .. _factory: https://flask.palletsprojects.com/en/1.1.x/patterns/appfactories/#basic-factories
 
 .. note::
-    flask_image_search loads keras/tensorflow when it is initialized,
-    this can become a real pain when debugging your flask app,
-    to stop tensorflow from loading and annoying you::
+    Flask-Image-Search loads the PyTorch model on initialization, which can
+    slow down the Flask dev-server restart loop. Disable model loading with::
 
-        image_search = ImageSearch(app, tensorflow=False)
+        image_search = ImageSearch(app, load_model=False)
 
-    when tensorflow is disabled the image search will return random results.
+    When the model is disabled, :meth:`~ImageSearch.feature_extract` returns
+    random vectors, so search results will be meaningless.
 
 Config
 ------
 
-+---------------------------------+------------------------------------------------------------------------------------------------------------+--------------------+
-| Option                          | Description                                                                                                | Default            |
-+=================================+============================================================================================================+====================+
-| ``IMAGE_SEARCH_PATH_PREFIX``    | This is a prefix that is added to the model ``__tablename__`` to get the file path for the index file.     | ``image_search/``  |
-+---------------------------------+------------------------------------------------------------------------------------------------------------+--------------------+
++----------------------------+-------------------------------------------------------------------------+------------------+
+| Option                     | Description                                                             | Default          |
++============================+=========================================================================+==================+
+| ``IMAGE_SEARCH_NAMESPACE`` | Scopes the vector table to this feature extractor. Auto-derived from    | (auto-derived)   |
+|                            | the model architecture hash so switching backbones never reuses         |                  |
+|                            | stale vectors. Override only if you need a stable, human-readable name. |                  |
++----------------------------+-------------------------------------------------------------------------+------------------+
 
 Registering Models
 ------------------
@@ -123,7 +125,7 @@ It is possible to manually delete an image from the index::
 
     image = Image.query.first()
 
-    image_search.delete(Image)
+    image_search.delete_index(image)
 
 
 Making a query
@@ -175,31 +177,85 @@ Heres how to get the distance as a mapped attribute on your Model::
     images = Image.query.options(db.with_expression(Image.distance, case_statement)) \
              .order_by("distance").all()
 
+Vector Storage Backends
+-----------------------
+
+Flask-Image-Search automatically selects a vector storage backend based on
+your database dialect and what is installed:
+
+- **SQLite + sqlite-vec** → :class:`SqliteVecBackend` — KNN search runs inside
+  SQLite; no corpus loaded into Python memory. Requires ``pip install flask-image-search[sqlite]``
+  and a Python build with ``SQLITE_ENABLE_LOAD_EXTENSION`` (Ubuntu, macOS;
+  **not** Fedora/RHEL). Falls back to :class:`GenericBackend` automatically.
+- **PostgreSQL + pgvector** → :class:`PgVectorBackend` — native ``vector``
+  column type with ``<->`` L2 operator; benefits from HNSW/IVFFlat indexes.
+  Requires ``pip install flask-image-search[postgres]``.
+- **Everything else** → :class:`GenericBackend` — works on every dialect.
+  Stores BLOBs in a sibling SQL table; loads all vectors into a NumPy matrix
+  in RAM and does a brute-force L2 scan (O(N)). Fast up to ~50 K images;
+  memory grows linearly (10 K VGG16 vectors ≈ 160 MB RAM).
+
+To check whether SQLite extension loading is available on your system::
+
+    python3 -c "import sqlite3; c=sqlite3.connect(':memory:'); print(hasattr(c,'enable_load_extension'))"
+
+To choose a backend explicitly instead of relying on auto-selection::
+
+    from flask_image_search import ImageSearch
+    from flask_image_search.backends import SqliteVecBackend
+
+    image_search = ImageSearch(app, backend=SqliteVecBackend())
+
 Advanced
 --------
 
-Changing Keras Model
-^^^^^^^^^^^^^^^^^^^^
+Changing the backbone model
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-By default `flask_image_search` uses the `VGG16`_ for it's feature extraction.
-You can change the keras model used for feature extraction by overriding some of the :class:`ImageSearch` class methods.
-Here is an example using `InceptionV3`_::
+By default Flask-Image-Search uses `torchvision VGG16`_ (4096-d, ImageNet
+weights) and the preprocessing pipeline that ships with those weights.
+Subclass :class:`ImageSearch` and override the relevant hooks to swap to
+any ``torch.nn.Module``::
 
+    import torchvision
+    from torch import nn
     from flask_image_search import ImageSearch
-    from keras.applications.inception_v3 import InceptionV3, preprocess_input
-    from keras.models import Model as KerasModel
 
 
-    class MyImageSearch(ImageSearch):
-        @staticmethod
-        def create_keras_model():
-            base_model = InceptionV3(weights="imagenet")
-            return KerasModel(inputs=base_model.input, outputs=base_model.get_layer("avg_pool").output)
+    class InceptionSearch(ImageSearch):
+        def get_model(self):
+            import torch
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            m = torchvision.models.inception_v3(
+                weights=torchvision.models.Inception_V3_Weights.DEFAULT
+            )
+            m.fc = nn.Identity()   # 2048-d output from the final pooling layer
+            m.aux_logits = False
+            m.to(self.device)
+            m.train(False)
+            return m
 
-        @staticmethod
-        def preprocess_image_array(image_array):
-            return preprocess_input(image_array)
+        def get_feature_size(self):
+            return 2048
 
+        def get_preprocess(self):
+            return torchvision.models.Inception_V3_Weights.DEFAULT.transforms()
 
-.. _VGG16: https://keras.io/api/applications/vgg/#vgg16-function
-.. _InceptionV3: https://keras.io/api/applications/inceptionv3/
+The hooks:
+
+- :meth:`~ImageSearch.get_model` — return the ``torch.nn.Module`` and set
+  ``self.device``.
+- :meth:`~ImageSearch.get_feature_size` — output dimensionality.
+- :meth:`~ImageSearch.get_preprocess` — the PIL→tensor transform. The
+  default uses ``VGG16_Weights.DEFAULT.transforms()``, which handles
+  resize, crop and normalise. Each torchvision weights enum exposes a
+  matching ``.transforms()`` so you rarely need to write one by hand.
+
+.. note::
+    Switching backbones invalidates existing indexed vectors. The
+    namespace is derived from the model architecture, so a fresh vector
+    table is created automatically — but you must re-index::
+
+        image_search.index_model(Image)
+
+.. _torchvision VGG16: https://pytorch.org/vision/stable/models/generated/torchvision.models.vgg16.html

@@ -15,32 +15,54 @@ Flask Image Search
         :alt: Documentation Status
 
 
-
-
-Flask Image Search is an extension for flask that makes it easy to add image searching to your flask site.
-
+Flask Image Search is an extension for Flask that adds content-based image
+search to a Flask + Flask-SQLAlchemy app. Features are extracted with a
+PyTorch CNN and stored alongside your model rows; queries are ranked by
+L2 distance.
 
 * Free software: MIT license
-* Documentation: https://flask-image-search.readthedocs.io.
+* Documentation: https://flask-image-search.readthedocs.io
 
 
 Features
 --------
 
-* Works with `Flask-SQLAlchemy`_ to make searching your database easy.
-* Searching is fast
-* The indexed images take up very little storage
-* Database changes automatically update the image indexes
+* Works with `Flask-SQLAlchemy`_ — search your database directly.
+* Indexes update automatically when rows are added, edited, or deleted.
+* Pluggable storage backends: works on any SQL dialect; opts into
+  ``sqlite-vec`` or ``pgvector`` when available for ANN-accelerated KNN.
 
 .. _Flask-SQLAlchemy: https://flask-sqlalchemy.palletsprojects.com/
 
-How it works
-------------
+Install
+-------
 
-Flask-Image-Search uses a `CNN (Convolutional neural network) <https://en.wikipedia.org/wiki/Convolutional_neural_network>`_,
-the CNN is used to extract the features from the images in a dataset. The features are stored so they can be searched later with a query image.
-When an image is searched it's features are extracted and compared with all the other images to get the distance from the search image,
-the distances are then used to sort the images.
+::
+
+    pip install flask-image-search
+
+See the `documentation <https://flask-image-search.readthedocs.io>`_ for
+usage, backend options, and the migration guide from 1.x.
+
+Development
+-----------
+
+Requires Python 3.9+ and pip 25.1+::
+
+    pip install -e . --group dev
+    pre-commit install --hook-type pre-commit --hook-type pre-push
+
+Common tasks (``poe --help`` lists everything)::
+
+    poe test          # run tests
+    poe lint          # ruff check
+    poe docs          # live-reload docs server
+    poe example       # run the demo Flask app
+
+Cutting a release::
+
+    bump-my-version bump patch    # or: minor / major
+    git push --tags               # CI publishes to PyPI
 
 Credits
 -------

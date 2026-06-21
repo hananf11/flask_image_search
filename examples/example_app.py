@@ -1,6 +1,6 @@
-from flask import Flask, render_template_string, request, redirect, flash
-from flask_sqlalchemy import SQLAlchemy
+from flask import Flask, flash, redirect, render_template_string, request
 from flask_image_search import ImageSearch
+from flask_sqlalchemy import SQLAlchemy
 from PIL import Image as PILImage
 
 app = Flask(__name__)
@@ -45,7 +45,11 @@ def home():
             flash("Failed to get image")
             return redirect("/")
         image = PILImage.open(f)
-        case = image_search.case(image, Image).label('d')
+        case = image_search.case(image, Image)
+        if case is None:
+            flash("Still indexing — please wait a moment and try again")
+            return redirect("/")
+        case = case.label('d')
         images = Image.query.options(db.with_expression(Image.distance, case)).order_by('d')
 
         radios = Radio.query.join(Radio.images).options(

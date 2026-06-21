@@ -1,8 +1,6 @@
 from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
-
 from flask_image_search import ImageSearch
-
+from flask_sqlalchemy import SQLAlchemy
 
 app = Flask(__name__)
 app.config.update({
@@ -34,13 +32,14 @@ class Image(db.Model):
         return f"<Image {self.id} {self.radio.name}>"
 
 
-image_search.index_model(Image, threaded=False)
+with app.app_context():
+    image_search.index_model(Image, threaded=False)
 
-images = Image.query.order_by(image_search.case("./test.jpg", Image)).all()
+    images = Image.query.order_by(image_search.case("./test.jpg", Image)).all()
 
-print(images)
+    print(images)
 
-radios = Radio.query.join(Radio.images).options(db.joinedload(Radio.images)).order_by(
-    image_search.case("./test.jpg", Image)).all()
+    radios = Radio.query.join(Radio.images).options(db.joinedload(Radio.images)).order_by(
+        image_search.case("./test.jpg", Image)).all()
 
-print(radios)
+    print(radios)

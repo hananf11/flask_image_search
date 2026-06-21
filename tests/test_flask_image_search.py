@@ -1,13 +1,9 @@
 """Tests for `flask_image_search` package."""
 
 import logging
-import os
-import numpy as np
-
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # noqa
+from pathlib import Path
 
 import pytest
-import zarr
 from sqlalchemy.sql.expression import func
 
 logger = logging.getLogger(__name__)
@@ -16,63 +12,72 @@ handler.setFormatter(logging.Formatter("%(asctime)s Testing: %(message)s"))
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-BASE_PATH = os.path.dirname(os.path.realpath(__file__))
-IMAGE = os.path.join(BASE_PATH, "./test.jpg")
+BASE_PATH = Path(__file__).resolve().parent
+IMAGE = str(BASE_PATH / "test.jpg")
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning:tensorflow")
 @pytest.mark.parametrize(
     "image_search",
     ["default", "vgg16", "vgg19", "inception_v3"],
     ids=["default", "vgg16", "vgg19", "inception_v3"],
     indirect=["image_search"]
 )
-def test_index_image(Image, image_search, tmp_path):
-    """Test that indexing images is working correctly"""
-    tmp_storage = zarr.open(str(tmp_path / 'tmp.zarr'), mode='a',
-                            shape=image_search.storage['/image_features'].shape,
-                            chunks=image_search.storage['/image_features'].chunks,
-                            dtype=np.float32)
+def test_index_image(Image, image_search):
+    """Deleting an image drops exactly one indexed feature; re-indexing restores it."""
+    before = image_search.count_indexed(Image)
 
-    tmp_storage[:] = image_search.storage["/image_features"][:]
-
-    # choose a random image to delete from the image index
     image_to_be_deleted = Image.query.order_by(func.random()).first()
     image_search.delete_index(image_to_be_deleted)
 
-    assert np.sum(
-        np.any(
-            tmp_storage[:] != 0,
-            axis=1
-        )
-    ) - 1 == np.sum(
-        np.any(
-            image_search.storage['/image_features'][:] != 0,
-            axis=1
-        )
-    )
+    assert image_search.count_indexed(Image) == before - 1
 
-    image_search.index_model(Image, threaded=False)  # index all missing images
+    image_search.index_model(Image, threaded=False)
 
-    assert np.sum(
-        np.any(
-            tmp_storage[:] != 0,
-            axis=1
-        )
-    ) == np.sum(
-        np.any(
-            image_search.storage['/image_features'][:] != 0,
-            axis=1
-        )
-    )
+    assert image_search.count_indexed(Image) == before
+
+
+@pytest.mark.parametrize(
+    "image_search",
+    ["default", "vgg16", "vgg19", "inception_v3"],
+    ids=["default", "vgg16", "vgg19", "inception_v3"],
+    indirect=["image_search"],
+)
+def test_feature_extract_batch_matches_single(image_search):
+    """Batched extraction must produce the same vectors as the single-image
+    path (within float tolerance) for every backbone."""
+    import numpy as np
+    from PIL import Image as PILImage
+
+    base = PILImage.open(IMAGE)
+    images = [base, base.rotate(90), base.transpose(PILImage.FLIP_LEFT_RIGHT)]
+
+    batched = image_search.feature_extract_batch(images)
+    single = [image_search.feature_extract(img) for img in images]
+
+    assert len(batched) == len(images)
+    for b, s in zip(batched, single):
+        assert np.allclose(b, s, atol=1e-5)
+
+
+@pytest.mark.parametrize("image_search", ["default"], indirect=["image_search"])
+def test_index_skips_empty_path(Image, image_search):
+    """A None/empty image path is skipped, not raised -- one bad row must not
+    abort index_model for the whole corpus."""
+    before = image_search.count_indexed(Image)
+
+    entry = Image.query.first()
+    entry.path = None  # simulate an orphan row with no resolvable image path
+
+    assert image_search.index(entry, replace=True) is False
+    assert image_search.count_indexed(Image) == before
 
 
 @pytest.mark.parametrize(
     "image_search, expected",
     [
-        ("vgg16", [4512, 2649, 4514, 4516, 2194]),
-        ("vgg19", [2649, 4512, 4514, 2197, 4516]),
-        ("inception_v3", [4512, 4516, 4514, 5171, 2649]),
+        ("vgg16", [4512, 2197, 2649, 4514, 5172]),
+        ("vgg19", [4512, 2649, 4514, 4516, 2194]),
+        ("inception_v3", [2649, 4514, 4512, 4166, 5132]),
     ],
     ids=["vgg16", "vgg19", "inception_v3"],
     indirect=["image_search"],
@@ -88,9 +93,9 @@ def test_search(Image, image_search, expected):
 @pytest.mark.parametrize(
     "image_search, expected",
     [
-        ("vgg16", [4512, 2649, 4514, 4516, 2194]),
-        ("vgg19", [2649, 4512, 4514, 2197, 4516]),
-        ("inception_v3", [4512, 4516, 4514, 5171, 2649]),
+        ("vgg16", [4512, 2197, 2649, 4514, 5172]),
+        ("vgg19", [4512, 2649, 4514, 4516, 2194]),
+        ("inception_v3", [2649, 4514, 4512, 4166, 5132]),
     ],
     ids=["vgg16", "vgg19", "inception_v3"],
     indirect=["image_search"]
@@ -108,26 +113,25 @@ def test_query_search(Image, image_search, expected):
         (
             "vgg16",
             {
-                439: [4512, 2649, 2204, 4513, 5115, 5117, 5116],
-                371: [4514, 4516, 4517, 4518, 1798, 1799, 4515, 4519, 1800],
-                438: [2194, 2197, 2196, 2193, 2195]
+                439: [4512, 2649, 2204, 4513, 5117, 5116, 5115],
+                438: [2197, 2194, 2196, 2195, 2193],
+                371: [4514, 4516, 4515, 1798, 4517, 4519, 1799, 1800, 4518],
             }
         ),
         (
             "vgg19",
             {
-                439: [2649, 4512, 2204, 4513, 5115, 5117, 5116],
-                371: [4514, 4516, 4517, 4518, 4515, 1798, 4519, 1799, 1800],
-                438: [2197, 2194, 2196, 2195, 2193]
-
+                439: [4512, 2649, 2204, 4513, 5117, 5115, 5116],
+                371: [4514, 4516, 4515, 4518, 4517, 1798, 1800, 4519, 1799],
+                438: [2194, 2197, 2196, 2195, 2193],
             }
         ),
         (
             "inception_v3",
             {
-                439: [4512, 2649, 2204, 4513, 5116, 5117, 5115],
-                371: [4516, 4514, 1798, 4519, 4515, 1800, 4518, 4517, 1799],
-                1011: [5171, 5172, 5170, 5173, 5178, 5180, 5177, 5179, 5175, 5176, 5174, 5181]
+                439: [2649, 4512, 2204, 5117, 5116, 4513, 5115],
+                371: [4514, 4516, 4519, 1799, 4518, 1800, 4515, 1798, 4517],
+                825: [4166, 4167, 4168],
             }
         ),
     ],

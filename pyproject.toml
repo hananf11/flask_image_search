@@ -1,0 +1,132 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Flask-Image-Search"
+dynamic = ["version"]
+description = "Image Searching For Flask and Flask-SQLAlchemy."
+readme = {file = "README.rst", content-type = "text/x-rst"}
+license = {text = "MIT"}
+authors = [{name = "Hanan Fokkens", email = "hananfokkens@gmail.com"}]
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "flask>=2.0",
+    "Flask-SQLAlchemy>=2.5",
+    "SQLAlchemy>=1.4",
+    "pillow>=8.2",
+    "numpy>=1.21",
+    "torch>=1.12",
+    "torchvision>=0.13",
+]
+
+[project.urls]
+Documentation = "https://flask-image-search.readthedocs.io"
+"Source Code" = "https://github.com/hananf11/flask_image_search"
+"Issue Tracker" = "https://github.com/hananf11/flask_image_search/issues"
+
+[project.optional-dependencies]
+sqlite = ["sqlite-vec"]
+postgres = ["pgvector"]
+# Single source of truth for documentation dependencies. Installed by Read the
+# Docs (extra_requirements in .readthedocs.yml), the CI docs job, and the dev
+# group below -- so the docs build can never pass in one place and fail another.
+docs = [
+    "Sphinx>=7,<9",
+    "Pallets-Sphinx-Themes>=2.1",
+    "sphinx-autobuild>=2024.0",
+    "sphinxcontrib-log-cabinet>=1.0",
+]
+
+# Tooling for working on the package itself. Not shipped in the wheel.
+# Requires pip >= 25.1 (or uv, hatch, pdm) to install with `pip install --group dev`.
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-xdist",
+    "pytest-cov",
+    "coverage",
+    "ruff",
+    "bump-my-version",
+    "pre-commit",
+    "poethepoet",
+    # Pull the docs deps from the [docs] extra so there's one list, not two.
+    "Flask-Image-Search[docs]",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "flask_image_search.__about__.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["flask_image_search*"]
+
+[tool.bumpversion]
+current_version = "2.0.0rc1"
+commit = true
+tag = true
+tag_name = "v{new_version}"
+message = "chore: bump version to {new_version}"
+
+[[tool.bumpversion.files]]
+filename = "flask_image_search/__about__.py"
+search = '__version__ = "{current_version}"'
+replace = '__version__ = "{new_version}"'
+
+[tool.ruff]
+line-length = 120
+src = ["flask_image_search", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "C90", "SIM", "PERF", "PL", "RUF", "B", "UP", "C4", "RET", "PTH", "N", "TRY", "ARG"]
+ignore = ["PLC0415", "TRY003"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test params/locals named after SQLAlchemy model classes (Image, Radio, Item)
+# are intentionally PascalCase; assertions legitimately compare against literals.
+"tests/*" = ["N803", "N806", "PLR2004"]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "double"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+# Run common dev tasks via `poe <task>` (e.g. `poe docs`).
+# Add or rename tasks here -- they're discoverable with `poe --help`.
+[tool.poe.tasks]
+test = {cmd = "pytest", help = "Run the test suite"}
+coverage = {cmd = "pytest --cov=flask_image_search -n auto", help = "Run the suite in parallel under coverage"}
+lint = {cmd = "ruff check", help = "Check lint"}
+fix = {cmd = "ruff check --fix", help = "Auto-fix lint issues"}
+docs = {cmd = "sphinx-autobuild docs docs/_build/html --open-browser", help = "Live-reload docs server"}
+docs-build = {cmd = "sphinx-build -b html docs docs/_build/html", help = "One-shot docs build"}
+example = {cmd = "python examples/example_app.py", help = "Run the demo Flask app"}
+fixtures = {cmd = "python tests/generate_fixtures.py", help = "Regenerate test feature vectors"}
+
+[tool.coverage.run]
+source = ["flask_image_search"]
+branch = true
+# Store paths relative to the repo root so coverage data produced in separate
+# CI jobs (different absolute checkout paths) combines cleanly in the gate job.
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+# Floor, not a target -- ratchet up as coverage improves. Enforced in the
+# `coverage` gate job, which combines data from the backends job (all three
+# vector backends) and the coverage-suite job (full model suite on sqlite) so
+# the number reflects real coverage across both.
+fail_under = 80
